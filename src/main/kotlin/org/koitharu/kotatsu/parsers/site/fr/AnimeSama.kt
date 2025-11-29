@@ -22,6 +22,7 @@ import org.koitharu.kotatsu.parsers.util.generateUid
 import org.koitharu.kotatsu.parsers.util.parseHtml
 import org.koitharu.kotatsu.parsers.util.parseJson
 import org.koitharu.kotatsu.parsers.util.parseRaw
+import org.koitharu.kotatsu.parsers.util.requireSrc
 import org.koitharu.kotatsu.parsers.util.splitByWhitespace
 import org.koitharu.kotatsu.parsers.util.toRelativeUrl
 import org.koitharu.kotatsu.parsers.util.urlDecode
@@ -30,7 +31,7 @@ import java.util.EnumSet
 
 @MangaSourceParser("ANIMESAMA", "AnimeSama", "fr")
 internal class AnimeSama(context: MangaLoaderContext) :
-	PagedMangaParser(context, source = MangaParserSource.ANIMESAMA, 96) {
+	PagedMangaParser(context, source = MangaParserSource.ANIMESAMA, 48) {
 
 	override val configKeyDomain = ConfigKey.Domain("anime-sama.org")
 	private val baseUrl = "https://$domain"
@@ -93,37 +94,30 @@ internal class AnimeSama(context: MangaLoaderContext) :
 	}
 
 	private fun parseCataloguePage(doc: Document): List<Manga> {
-		return doc.select("#list_catalog > div").mapNotNull { element ->
+		return doc.select("div.shrink-0.catalog-card.card-base").mapNotNull { element ->
 			val a = element.selectFirst("a") ?: return@mapNotNull null
-			val title = element.selectFirst("h1")?.text() ?: return@mapNotNull null
-			val cover = element.selectFirst("img")?.attr("src") ?: return@mapNotNull null
+			val title = element.selectFirst("h2")?.text() ?: return@mapNotNull null
+			val cover = element.selectFirst("img")?.requireSrc()
 			val href = a.attr("href").removeSuffix("/")
-
-			createManga(
-				href = href,
-				title = title,
-				cover = cover
-			)
+			Manga(
+                id = generateUid(href),
+                title = normalizeTitle(title),
+                altTitles = emptySet(),
+                url = href.toRelativeUrl(domain),
+                publicUrl = href,
+                rating = RATING_UNKNOWN,
+                contentRating = ContentRating.SAFE,
+                coverUrl = cover,
+                largeCoverUrl = null,
+                tags = emptySet(),
+                state = null,
+                authors = emptySet(),
+                description = null,
+                chapters = null,
+                source = source,
+            )
 		}
 	}
-
-	private fun createManga(href: String, title: String, cover: String) = Manga(
-		id = generateUid(href),
-		title = normalizeTitle(title),
-		altTitles = emptySet(),
-		url = href.toRelativeUrl(domain),
-		publicUrl = href,
-		rating = RATING_UNKNOWN,
-		contentRating = ContentRating.SAFE,
-		coverUrl = cover,
-		largeCoverUrl = null,
-		tags = emptySet(),
-		state = null,
-		authors = emptySet(),
-		description = null,
-		chapters = null,
-		source = source,
-	)
 
 	override suspend fun getDetails(manga: Manga): Manga {
 		val doc = webClient.httpGet(manga.publicUrl.toHttpUrl()).parseHtml()
