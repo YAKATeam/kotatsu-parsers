@@ -53,15 +53,9 @@ internal class AnimeSama(context: MangaLoaderContext) :
 
 	override suspend fun getFilterOptions(): MangaListFilterOptions {
 		val doc = webClient.httpGet("$baseUrl/catalogue").parseHtml()
-		val genres = doc.select("#list_genres label").mapNotNull { labelElement ->
-			val input = labelElement.selectFirst("input[name=genre[]]") ?: return@mapNotNull null
-			val labelText = labelElement.ownText()
-			val value = input.attr("value")
-			MangaTag(
-				key = value,
-				title = labelText,
-				source = source,
-			)
+		val genres = doc.select("div#genreList span").mapNotNull { labelElement ->
+            val tag = labelElement.text()
+            MangaTag(tag, tag, source)
 		}.toSet()
 
 		return MangaListFilterOptions(
