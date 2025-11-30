@@ -53,6 +53,17 @@ public abstract class MangaLoaderContext {
 		throw UnsupportedOperationException("Browser is not available")
 	}
 
+    /**
+     * Request value from browser action by monitoring URL queries, cookies, localStorage, and sessionStorage
+     * @param parser MangaParser instance
+     * @param url Initial URL to load in WebView
+     * @param value Key name to search for in queries/cookies/storage
+     * @return The value found, or throws exception if not supported
+     */
+    public open suspend fun requestValueAction(parser: MangaParser, url: String, value: String): String {
+        throw UnsupportedOperationException("Browser is not available")
+    }
+
 	public abstract fun getConfig(source: MangaSource): MangaSourceConfig
 
 	public abstract fun getDefaultUserAgent(): String
