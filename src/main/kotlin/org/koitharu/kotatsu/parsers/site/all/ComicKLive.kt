@@ -169,14 +169,8 @@ internal class ComicKLive(context: MangaLoaderContext) :
                     else -> ContentRating.SAFE
                 },
                 coverUrl = jo.getStringOrNull("default_thumbnail"),
-                largeCoverUrl = null,
-                description = null,
                 tags = jo.selectGenres(tagsMap),
-                state = if (jo.getBoolean("is_ended")) {
-                    MangaState.FINISHED
-                } else {
-                    MangaState.ONGOING
-                },
+                state = null,
                 authors = emptySet(),
                 source = source,
             )
@@ -223,6 +217,13 @@ internal class ComicKLive(context: MangaLoaderContext) :
                 }.toSet()
             } ?: emptySet(),
             authors = authors,
+            state = when (jo.getInt("status")) {
+                1 -> MangaState.ONGOING
+                2 -> MangaState.FINISHED
+                3 -> MangaState.ABANDONED
+                4 -> MangaState.PAUSED
+                else -> null
+            },
             chapters = getChapters(manga.url),
         )
     }
