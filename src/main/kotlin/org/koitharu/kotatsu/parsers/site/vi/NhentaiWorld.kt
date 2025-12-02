@@ -2,7 +2,7 @@ package org.koitharu.kotatsu.parsers.site.vi
 
 import okhttp3.Headers
 import org.json.JSONArray
-import org.koitharu.kotatsu.parsers.Broken
+import org.json.JSONObject
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -10,16 +10,16 @@ import org.koitharu.kotatsu.parsers.core.PagedMangaParser
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
-import org.koitharu.kotatsu.parsers.util.json.getStringOrNull
+import org.koitharu.kotatsu.parsers.util.json.mapJSONToSet
 import java.text.SimpleDateFormat
 import java.util.*
 
-@Broken("Re-write this extension")
 @MangaSourceParser("NHENTAIWORLD", "Nhentai World", "vi", ContentType.HENTAI)
 internal class NhentaiWorld(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.NHENTAIWORLD, 24) {
 
-	override val configKeyDomain = ConfigKey.Domain("nhentaiworld-h1.art")
+    private val apiDomain = "nhentaiclub.cyou"
+	override val configKeyDomain = ConfigKey.Domain("nhentaiclub.icu")
 
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
 		super.onCreateConfig(keys)
@@ -40,7 +40,7 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 		get() = MangaListFilterCapabilities(
 			isSearchSupported = true,
 			isSearchWithFiltersSupported = true,
-			isMultipleTagsSupported = false,
+            isAuthorSearchSupported = true,
 		)
 
 	override suspend fun getFilterOptions() = MangaListFilterOptions(
@@ -50,10 +50,11 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		val urlBuilder = urlBuilder()
-			.addPathSegment("genre")
-		filter.tags.oneOrThrowIfMany()?.also {
-			urlBuilder.addPathSegment(it.key)
-		} ?: urlBuilder.addPathSegment("all")
+            urlBuilder.host(apiDomain)
+            urlBuilder.addPathSegment("comic")
+            urlBuilder.addPathSegment("gets")
+
+        // Sort
 		urlBuilder.addQueryParameter(
 			"sort",
 			when (order) {
@@ -62,21 +63,46 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 				else -> "recent-update"
 			},
 		)
-		filter.query?.nullIfEmpty()?.let {
-			urlBuilder.addQueryParameter("search", it)
-		}
 
-		filter.states.oneOrThrowIfMany()?.let {
+        // Tag (once)
+        if (filter.tags.isNotEmpty()) {
+            val key = filter.tags.oneOrThrowIfMany()
+                ?.key
+                ?.splitByWhitespace()
+                ?.joinToString("+") { it }
+            urlBuilder.addQueryParameter("genre", key)
+        }
+
+        // Search
+		if (!filter.query.isNullOrEmpty()) {
 			urlBuilder.addQueryParameter(
-				"status",
-				when (it) {
-					MangaState.ONGOING -> "progress"
-					MangaState.FINISHED -> "completed"
-					else -> ""
-				},
-			)
+                "search",
+                filter.query.splitByWhitespace().joinToString("+") { it }
+            )
 		}
 
+        // State
+        if (filter.states.isNotEmpty()) {
+            filter.states.oneOrThrowIfMany()?.let {
+                urlBuilder.addQueryParameter(
+                    "status",
+                    when (it) {
+                        MangaState.FINISHED -> "completed"
+                        else -> "progress"
+                    }
+                )
+            }
+        }
+
+        // Author
+        if (!filter.author.isNullOrEmpty()) {
+            urlBuilder.addQueryParameter(
+                "author",
+                filter.author.splitByWhitespace().joinToString("+") { it }
+            )
+        }
+
+        // Paging
 		urlBuilder.addQueryParameter("page", page.toString())
 
 		val doc = webClient.httpGet(urlBuilder.build()).parseHtml()
@@ -265,37 +291,19 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 		}
 	}
 
-	private suspend fun fetchTags(): Set<MangaTag> {
-		val doc = webClient.httpGet("https://$domain").parseHtml()
-		val scriptSrc = doc.select("script")[7].src()!!
-		val docJS = webClient.httpGet(scriptSrc).parseRaw()
+    private suspend fun fetchTags(): Set<MangaTag> {
+        val url = "https://$domain/_next/static/chunks/130-5a83ead201ba7c6a.js"
+        val response = webClient.httpGet(url).parseRaw()
 
-		val optionsStart = docJS.indexOf("genres:[{")
-		if (optionsStart == -1) return emptySet()
+        val subString = response
+            .substringAfter("{genres:")
+            .substringBefore(",status")
 
-		val optionsEnd = docJS.indexOf("}]", optionsStart)
-		if (optionsEnd == -1) return emptySet()
+        val ja = JSONObject("{\"genres\":$subString}")
 
-		val optionsStr = docJS.substring(optionsStart + 7, optionsEnd + 2)
-
-		val optionsArray = JSONArray(
-			optionsStr
-				.replace(Regex(",description:\\s*\"[^\"]*\"(,?)"), "")
-				.replace(Regex("(\\w+):"), "\"$1\":")
-		)
-
-		return buildSet {
-			for (i in 0 until optionsArray.length()) {
-				// {"label":"Ahegao","href":"/genre/ahegao"}
-				val option = optionsArray.getJSONObject(i)
-				val title = option.getStringOrNull("label")!!.toTitleCase(sourceLocale)
-				val key = option.getStringOrNull("href")!!.split("/")[2]
-				if (title.isNotEmpty() && key.isNotEmpty()) {
-					if (title != "Tất cả" || key != "all") { // remove "All" tags, default list = all
-						add(MangaTag(title = title, key = key, source = source))
-					}
-				}
-			}
-		}
-	}
+        return ja.getJSONArray("genres").mapJSONToSet { jo ->
+            val label = jo.getString("label")
+            MangaTag(label, label, source)
+        }
+    }
 }
