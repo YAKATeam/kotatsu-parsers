@@ -21,8 +21,8 @@ private const val CHAPTERS_LIMIT = 99999
 
 @Broken("Debugging")
 @MangaSourceParser("COMICKLIVE", "ComicK (Unofficial)")
-internal class ComickFunParser(context: MangaLoaderContext) :
-    PagedMangaParser(context, MangaParserSource.COMICK_FUN, 20) {
+internal class ComicKLive(context: MangaLoaderContext) :
+    PagedMangaParser(context, MangaParserSource.COMICKLIVE, 20) {
 
     override val configKeyDomain = ConfigKey.Domain(
         "comick.live",
