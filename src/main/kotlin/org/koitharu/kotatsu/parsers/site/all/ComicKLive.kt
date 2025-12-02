@@ -6,7 +6,6 @@ import okhttp3.HttpUrl
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.Jsoup.parseBodyFragment
-import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -19,7 +18,6 @@ import org.koitharu.kotatsu.parsers.util.suspendlazy.suspendLazy
 import java.text.SimpleDateFormat
 import java.util.*
 
-@Broken("Debugging")
 @MangaSourceParser("COMICKLIVE", "ComicK (Unofficial)")
 internal class ComicKLive(context: MangaLoaderContext) :
     PagedMangaParser(context, MangaParserSource.COMICKLIVE, 20) {
@@ -229,14 +227,24 @@ internal class ComicKLive(context: MangaLoaderContext) :
         )
     }
 
-    private suspend fun getChapters(hid: String): List<MangaChapter> {
-        val ja = webClient.httpGet(
-            url = "https://api.${domain}/comic/$hid/chapters?limit=99999",
-        ).parseJson().getJSONArray("chapters")
+    private suspend fun getChapters(slug: String): List<MangaChapter> {
         val dateFormat = SimpleDateFormat("yyyy-MM-dd")
-        return ja.asTypedList<JSONObject>().reversed().mapChapters { _, jo ->
+
+        // get all chapters from API
+        val firstPg = webClient.httpGet("https://$domain/api/comics/$slug/chapter-list")
+            .parseJson()
+            .getJSONObject("pagination")
+        val lastPg = findLastPage(firstPg)
+
+        val allChaps = (1..lastPg).flatMap { page ->
+            val res = webClient.httpGet("https://$domain/api/comics/$slug/chapter-list?page=$page")
+                .parseJson()
+            res.getJSONArray("data").asTypedList<JSONObject>()
+        }
+
+        return allChaps.reversed().mapChapters { _, jo ->
             val vol = jo.getIntOrDefault("vol", 0)
-            val chap = jo.getFloatOrDefault("chap", 0f)
+            val chap = jo.getFloat("chap")
             val locale = Locale.forLanguageTag(jo.getString("lang"))
             val group = jo.optJSONArray("group_name")?.joinToString(", ")
             val branch = buildString {
@@ -252,7 +260,7 @@ internal class ComicKLive(context: MangaLoaderContext) :
                 title = jo.getStringOrNull("title"),
                 number = chap,
                 volume = vol,
-                url = jo.getString("hid"),
+                url = "$slug/${jo.getString("hid")}-chapter-$chap-${jo.getString("lang")}",
                 scanlator = jo.optJSONArray("group_name")?.asTypedList<String>()?.joinToString()
                     ?.takeUnless { it.isBlank() },
                 uploadDate = dateFormat.parseSafe(jo.getString("created_at").substringBefore('T')),
@@ -263,10 +271,15 @@ internal class ComicKLive(context: MangaLoaderContext) :
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-        val jo = webClient.httpGet(
-            "https://api.${domain}/chapter/${chapter.url}?tachiyomi=true",
-        ).parseJson().getJSONObject("chapter")
-        return jo.getJSONArray("images").mapJSON {
+        // Again :p?
+        val jo = webClient.httpGet("https://${domain}/${chapter.url}")
+            .parseHtml().selectFirst("#sv-data")?.data()
+            ?: throw IllegalArgumentException("Page data not found")
+
+        val imgs = JSONObject(jo)
+            .getJSONObject("chapter")
+
+        return imgs.getJSONArray("images").mapJSON {
             val url = it.getString("url")
             MangaPage(
                 id = generateUid(url),
@@ -281,8 +294,6 @@ internal class ComicKLive(context: MangaLoaderContext) :
         val slug = link.pathSegments.lastOrNull() ?: return null
         return resolver.resolveManga(this, url = slug, id = generateUid(slug))
     }
-
-    private val tagsArray = suspendLazy(initializer = ::loadTags)
 
     private suspend fun fetchAvailableTags(): Set<MangaTag> {
         val sparseArray = tagsArray.get()
@@ -312,6 +323,28 @@ internal class ComicKLive(context: MangaLoaderContext) :
         return tags
     }
 
+    private fun findTagBySlug(tags: SparseArrayCompat<MangaTag>, slug: String): MangaTag? {
+        // Same problem
+        for (i in 0 until tags.size()) {
+            val tag = tags.valueAt(i)
+            if (tag.key == slug) {
+                return tag
+            }
+        }
+        return null
+    }
+
+    private fun findLastPage(pagination: JSONObject): Int {
+        // should return 1 as default if cant find last pageNum
+        val links = pagination.optJSONArray("links") ?: return 1
+        return (0 until links.length())
+            .mapNotNull { i ->
+                val label = links.getJSONObject(i).optString("label")
+                label.toIntOrNull()
+            }
+            .maxOrNull() ?: 1
+    }
+
     private fun JSONObject.selectGenres(tags: SparseArrayCompat<MangaTag>): Set<MangaTag> {
         // Ref from Redo, like a mess
         // Need to debug that website to refactor it, leave it later
@@ -336,18 +369,9 @@ internal class ComicKLive(context: MangaLoaderContext) :
         return res
     }
 
-    private fun findTagBySlug(tags: SparseArrayCompat<MangaTag>, slug: String): MangaTag? {
-        // Same problem
-        for (i in 0 until tags.size()) {
-            val tag = tags.valueAt(i)
-            if (tag.key == slug) {
-                return tag
-            }
-        }
-        return null
-    }
-
     private fun JSONArray.joinToString(separator: String): String {
         return (0 until length()).joinToString(separator) { i -> getString(i) }
     }
+
+    private val tagsArray = suspendLazy(initializer = ::loadTags)
 }
