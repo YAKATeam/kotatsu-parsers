@@ -188,7 +188,7 @@ internal class ComicKLive(context: MangaLoaderContext) :
 
     override suspend fun getDetails(manga: Manga): Manga {
         val domain = domain
-        val url = "https://api.$domain/comic/${manga.url}?tachiyomi=true"
+        val url = "https://$domain/api/comic/${manga.url}?tachiyomi=true"
         val jo = webClient.httpGet(url).parseJson()
         val comic = jo.getJSONObject("comic")
         val alt = comic.getJSONArray("md_titles").asTypedList<JSONObject>().mapNotNullToSet {
@@ -281,9 +281,12 @@ internal class ComicKLive(context: MangaLoaderContext) :
     }
 
     private suspend fun loadTags(): SparseArrayCompat<MangaTag> {
-        val ja = webClient.httpGet("https://api.${domain}/genre").parseJsonArray()
-        val tags = SparseArrayCompat<MangaTag>(ja.length())
-        for (jo in ja.asTypedList<JSONObject>()) {
+        val response = webClient.httpGet("https://$domain/api/metadata").parseJson()
+        val genres = response.getJSONArray("genres")
+        val tags = SparseArrayCompat<MangaTag>(genres.length())
+
+        for (i in 0 until genres.length()) {
+            val jo = genres.getJSONObject(i)
             tags.append(
                 jo.getInt("id"),
                 MangaTag(
