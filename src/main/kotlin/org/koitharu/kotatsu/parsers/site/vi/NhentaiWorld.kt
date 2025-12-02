@@ -10,6 +10,7 @@ import org.koitharu.kotatsu.parsers.core.PagedMangaParser
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
+import org.koitharu.kotatsu.parsers.util.json.mapJSONNotNull
 import org.koitharu.kotatsu.parsers.util.json.mapJSONToSet
 import java.text.SimpleDateFormat
 import java.util.*
@@ -19,6 +20,7 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.NHENTAIWORLD, 24) {
 
     private val apiDomain = "nhentaiclub.cyou"
+    private val cdnDomain = "i1.nhentaiclub.shop"
 	override val configKeyDomain = ConfigKey.Domain("nhentaiclub.icu")
 
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
@@ -105,24 +107,19 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
         // Paging
 		urlBuilder.addQueryParameter("page", page.toString())
 
-		val doc = webClient.httpGet(urlBuilder.build()).parseHtml()
-		return doc.select("div.relative.mb-1.h-full.max-h-\\[375px\\]").map { div ->
-			val img = div.selectFirst("img.hover\\:scale-105.transition-all.w-full.h-full")
-			val a = div.selectFirstOrThrow("a")
-
-			val title = img?.attr("alt").orEmpty()
-			val coverUrl = img?.attrAsAbsoluteUrlOrNull("src")
-			val href = a.attrAsRelativeUrl("href")
-
+		val res = webClient.httpGet(urlBuilder.build()).parseJson()
+		return res.getJSONArray("data").mapJSONNotNull { ja ->
+			val id = ja.getLong("id")
+            val thumbnail = "$cdnDomain/$id/thumbnail.jpg"
 			Manga(
-				id = generateUid(href),
-				title = title,
+				id = generateUid(id),
+				title = ja.getString("name"),
 				altTitles = emptySet(),
-				url = href,
-				publicUrl = href.toAbsoluteUrl(domain),
+				url = id.toString(),
+				publicUrl = "/g/$id".toAbsoluteUrl(domain),
 				rating = RATING_UNKNOWN,
 				contentRating = ContentRating.ADULT,
-				coverUrl = coverUrl,
+				coverUrl = thumbnail,
 				tags = emptySet(),
 				state = null,
 				authors = emptySet(),
@@ -207,7 +204,7 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 
 		val vnArray = try {
 			JSONArray(vnChapterStr)
-		} catch (e: Exception) {
+		} catch (_: Exception) {
 			JSONArray()
 		}
 
@@ -243,7 +240,7 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 
 		val enArray = try {
 			JSONArray(enChapterStr)
-		} catch (e: Exception) {
+		} catch (_: Exception) {
 			JSONArray()
 		}
 
