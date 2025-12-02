@@ -249,7 +249,7 @@ internal class ComicKLive(context: MangaLoaderContext) :
 
         return allChaps.reversed().mapChapters { _, jo ->
             val vol = jo.getIntOrDefault("vol", 0)
-            val chap = jo.getFloat("chap")
+            val chap = jo.getFloatOrDefault("chap", 0f)
             val locale = Locale.forLanguageTag(jo.getString("lang"))
             val group = jo.optJSONArray("group_name")?.joinToString(", ")
             val branch = buildString {
