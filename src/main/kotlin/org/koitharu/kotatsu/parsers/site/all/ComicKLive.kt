@@ -24,7 +24,10 @@ private const val CHAPTERS_LIMIT = 99999
 internal class ComickFunParser(context: MangaLoaderContext) :
     PagedMangaParser(context, MangaParserSource.COMICK_FUN, 20) {
 
-    override val configKeyDomain = ConfigKey.Domain("comick.io")
+    override val configKeyDomain = ConfigKey.Domain(
+        "comick.live",
+        "comick.art"
+    )
 
     override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
         super.onCreateConfig(keys)
@@ -68,8 +71,8 @@ internal class ComickFunParser(context: MangaLoaderContext) :
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
         val domain = domain
         val url = urlBuilder()
-            .host("api.$domain")
-            .addPathSegment("v1.0")
+            .host(domain)
+            .addPathSegment("api")
             .addPathSegment("search")
             .addQueryParameter("type", "comic")
             .addQueryParameter("tachiyomi", "true")
@@ -149,8 +152,8 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 
         val ja = try {
             webClient.httpGet(url.build()).parseJsonArray()
-        } catch (_: Exception) {
-            throw IllegalArgumentException("ComicK is down!")
+        } catch (e: Exception) {
+            throw Exception(e) // debugging
         }
 
         val tagsMap = tagsArray.get()
