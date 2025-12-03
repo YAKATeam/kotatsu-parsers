@@ -44,7 +44,6 @@ import org.koitharu.kotatsu.parsers.util.splitByWhitespace
 import org.koitharu.kotatsu.parsers.util.suspendlazy.suspendLazy
 import org.koitharu.kotatsu.parsers.util.toAbsoluteUrl
 import org.koitharu.kotatsu.parsers.util.toTitleCase
-import org.koitharu.kotatsu.parsers.util.urlEncoded
 import java.text.SimpleDateFormat
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
@@ -194,10 +193,9 @@ internal abstract class MangaFireParser(
 
             when {
                 !filter.query.isNullOrEmpty() -> {
-                    // TS: opts.query.replace(" ", "+")
-                    val query = filter.query.trim()
-                    val encodedQuery = query.replace(" ", "+")
-                    addEncodedQueryParameter("keyword", encodedQuery)
+					// No need to encode query
+                    val query = filter.query.splitByWhitespace().joinToString("+") { it }
+                    addQueryParameter("keyword", query)
 
                     // TS: const vrf = this.generate(opts.query.trim());
                     // Generate VRF for search query (raw, before + replacement)
@@ -683,11 +681,11 @@ private object VrfGenerator {
         for (k in input.indices) {
             i = (i + 1) and 0xFF
             j = (j + s[i]) and 0xFF
-            
+
             val temp = s[i]
             s[i] = s[j]
             s[j] = temp
-            
+
             val t = (s[i] + s[j]) and 0xFF
             val kByte = s[t]
             output[k] = (input[k].toInt() xor kByte).toByte()
@@ -696,29 +694,29 @@ private object VrfGenerator {
     }
 
     private fun transform(
-        input: ByteArray, 
-        seed: ByteArray, 
-        prefix: ByteArray, 
+        input: ByteArray,
+        seed: ByteArray,
+        prefix: ByteArray,
         schedule: List<(Int) -> Int>
     ): ByteArray {
         val out = ByteArrayOutputStream()
-        
+
         // Matches TS Logic: Interleave prefix bytes with transformed bytes
         // The output array grows: input.length + prefix.length (if input is long enough)
         for (i in input.indices) {
             if (i < prefix.size) {
                 out.write(prefix[i].toInt())
             }
-            
+
             val inputByte = input[i].toInt() and 0xFF
             val seedByte = seed[i % 32].toInt() and 0xFF
             val xored = inputByte xor seedByte
-            
+
             // Apply schedule function
             val transformed = schedule[i % 10](xored)
             out.write(transformed)
         }
-        
+
         return out.toByteArray()
     }
 }
