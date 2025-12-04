@@ -13,6 +13,7 @@ import org.koitharu.kotatsu.parsers.util.json.asTypedList
 import org.koitharu.kotatsu.parsers.util.json.mapJSONIndexed
 import org.koitharu.kotatsu.parsers.util.json.mapJSONNotNull
 import org.koitharu.kotatsu.parsers.util.json.mapJSONToSet
+import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -158,10 +159,7 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 			val name = vi.getString("name")
 
 			// Can contains "Oneshot"
-			val number = when {
-				name.contains("oneshot", ignoreCase = true) -> 0f
-				else -> name.toFloatOrNull() ?: (i.toFloat() + 1)
-			}
+			val number = parseChapterNumber(name, i)
 
 			// Special URL
 			val url = urlBuilder()
@@ -187,10 +185,7 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 		val en = jo.getJSONArray("chapterListEn").mapJSONIndexed { i, en ->
 			val locale = Locale.forLanguageTag("en")
 			val name = en.getString("name")
-			val number = when {
-				name.contains("oneshot", ignoreCase = true) -> 0f
-				else -> name.toFloatOrNull() ?: (i.toFloat() + 1)
-			}
+			val number = parseChapterNumber(name, i)
 			val url = urlBuilder()
 				url.addQueryParameter("name", name)
 				url.addQueryParameter("language", "EN")
@@ -222,7 +217,7 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val params = parseQueryParams(chapter.url)
 
-		val name = params["name"]
+		val name = URLDecoder.decode(params["name"], "UTF-8")
 			?: chapter.url.substringAfter("name=").substringBefore("&language")
 				.ifBlank { throw ParseException("Cant get chapter name", chapter.url) }
 
@@ -275,6 +270,12 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
 			firstDigit < 8 -> "i3.nhentaiclub.shop"
 			else -> "i1.nhentaiclub.shop"
 		}
+	}
+
+	private fun parseChapterNumber(name: String, index: Int): Float {
+		if (name.contains("oneshot", ignoreCase = true)) return 0f
+		return Regex("""^\d+(\.\d+)?""").find(name)?.value?.toFloat()
+			?: (index + 1).toFloat()
 	}
 
 	private fun parseQueryParams(url: String): Map<String, String> {
