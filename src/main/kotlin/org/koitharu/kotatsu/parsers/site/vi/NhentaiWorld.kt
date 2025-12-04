@@ -9,6 +9,7 @@ import org.koitharu.kotatsu.parsers.core.PagedMangaParser
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
+import org.koitharu.kotatsu.parsers.util.json.asTypedList
 import org.koitharu.kotatsu.parsers.util.json.mapJSONIndexed
 import org.koitharu.kotatsu.parsers.util.json.mapJSONNotNull
 import org.koitharu.kotatsu.parsers.util.json.mapJSONToSet
@@ -146,10 +147,9 @@ internal class NhentaiWorld(context: MangaLoaderContext) :
             else -> null
         }
 
-        val tags = jo.optJSONArray("genres")?.mapJSONToSet { tag ->
-            val tag = tag.toString()
-            MangaTag(tag, tag, source)
-        } ?: emptySet()
+        val tags = jo.optJSONArray("genres")?.asTypedList<String>()?.mapToSet { tag ->
+			MangaTag(tag, tag, source)
+		} ?: emptySet()
 
         // List chapters (Vietnamese + English)
 		val df = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT)
