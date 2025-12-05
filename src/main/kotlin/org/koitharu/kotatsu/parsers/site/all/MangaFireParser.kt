@@ -43,7 +43,6 @@ import org.koitharu.kotatsu.parsers.util.selectFirstOrThrow
 import org.koitharu.kotatsu.parsers.util.suspendlazy.suspendLazy
 import org.koitharu.kotatsu.parsers.util.toAbsoluteUrl
 import org.koitharu.kotatsu.parsers.util.toTitleCase
-import org.koitharu.kotatsu.parsers.util.urlEncoded
 import java.text.SimpleDateFormat
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
