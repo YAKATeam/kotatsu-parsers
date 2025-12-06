@@ -4,6 +4,7 @@ import androidx.collection.ArrayMap
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl
@@ -27,11 +28,9 @@ internal class MangaPark(context: MangaLoaderContext) :
 
     override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
         super.onCreateConfig(keys)
-        // If you have a custom userAgentKey in your project add it here, else remove the call.
-        // keys.add(userAgentKey)
+        keys.add(userAgentKey)
     }
 
-    // Use correct enum constant name (uppercase)
     override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.RELEVANCE)
 
     override val filterCapabilities: MangaListFilterCapabilities
@@ -137,14 +136,13 @@ internal class MangaPark(context: MangaLoaderContext) :
             put("query", query)
             put("variables", variables)
         }
-        val body = payload.toString().toRequestBody("application/json".toMediaType())
-        val url = "https://$domain/apo/".toHttpUrl().newBuilder().build()
+        val url = "https://$domain/apo/".toHttpUrl()
+        
+        // FIX 1: Use Headers.of() and pass JSONObject payload directly to match extension signature
+        val headers = Headers.of(mapOf("Referer" to "https://$domain/"))
 
-        // Use project webClient's httpPost if available — replace name/signature if different.
         val responseJson = try {
-            // webClient.httpPost(url, body, headers) is a common pattern — adjust to your project's helper if needed
-            webClient.httpPost(url, body, headers = mapOf("Referer" to "https://$domain/"))
-                .parseJson()
+            webClient.httpPost(url, payload, headers).parseJson()
         } catch (e: Exception) {
             throw ParseException("GraphQL request failed for $url: ${e.message}", urlToString(url))
         }
@@ -209,6 +207,9 @@ internal class MangaPark(context: MangaLoaderContext) :
                     "completed" -> MangaState.FINISHED
                     else -> null
                 },
+                // FIX 2: Explicitly pass mandatory tags and authors parameters
+                tags = emptySet(),
+                authors = emptySet(),
                 source = source
             )
         }
@@ -262,7 +263,10 @@ internal class MangaPark(context: MangaLoaderContext) :
             val uploadDate = epochToMillis(if (dateModify > 0L) dateModify else dateCreate)
 
             val userNode = cData.optJSONObject("userNode")?.optJSONObject("data")
-            val scanlator = userNode?.optString("name") ?: cData.optString("srcTitle").nullIfEmpty()
+            
+            // FIX 3: Safe nullable handling for scanlator extraction
+            val scanlator = userNode?.optString("name")?.nullIfEmpty()
+                ?: cData.optString("srcTitle").nullIfEmpty()
 
             val number = parseChapterNumber(dname)
 
@@ -276,7 +280,7 @@ internal class MangaPark(context: MangaLoaderContext) :
                     number = number,
                     volume = 0,
                     uploadDate = uploadDate,
-                    scanlator = scanlator.nullIfEmpty(),
+                    scanlator = scanlator,
                     source = source,
                     branch = null
                 )
