@@ -159,8 +159,10 @@ internal class MangaPark(context: MangaLoaderContext) :
             Triple(null, null, null)
         }
 
-        // Extract original comic id robustly
-        val comicId = extractFirstDigits(manga.url) ?: extractFirstDigits(manga.id)
+        // Extract original comic id robustly: prefer publicUrl (absolute), then url, then id.
+        val comicId = extractFirstDigits(manga.publicUrl)
+            ?: extractFirstDigits(manga.url)
+            ?: extractFirstDigits(manga.id)
             ?: throw Exception("Could not find comic numeric ID for ${manga.title}")
 
         val chaptersJson = try {
@@ -263,6 +265,7 @@ internal class MangaPark(context: MangaLoaderContext) :
 
         val headers = Headers.Builder()
             .add("Content-Type", "application/json")
+            .add("Accept", "application/json")
             .add("Referer", baseUrl)
             .build()
 
