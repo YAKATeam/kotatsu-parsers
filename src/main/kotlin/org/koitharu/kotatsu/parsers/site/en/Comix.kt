@@ -3,7 +3,6 @@ package org.koitharu.kotatsu.parsers.site.en
 import androidx.collection.arraySetOf
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
 import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
@@ -19,6 +18,7 @@ import java.util.*
 internal class Comix(context: MangaLoaderContext) :
     PagedMangaParser(context, MangaParserSource.COMIX, 28) {
 
+	private val apiSuffix = "api/v2/manga"
     override val configKeyDomain = ConfigKey.Domain("comix.to")
 
     override val availableSortOrders: Set<SortOrder> = EnumSet.of(
@@ -41,9 +41,12 @@ internal class Comix(context: MangaLoaderContext) :
     )
 
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-        val url = "https://${domain}/api/v2/manga".toHttpUrl().newBuilder().apply {
+        val url = urlBuilder()
+			.host(domain)
+			.addPathSegments(apiSuffix)
+
             if (!filter.query.isNullOrEmpty()) {
-                addQueryParameter("keyword", filter.query)
+                url.addQueryParameter("keyword", filter.query)
             }
 
             val orderParam = when (order) {
@@ -56,24 +59,23 @@ internal class Comix(context: MangaLoaderContext) :
             }
 
             val direction = if (order == SortOrder.ALPHABETICAL) "asc" else "desc"
-            addQueryParameter("order[$orderParam]", direction)
+            url.addQueryParameter("order[$orderParam]", direction)
 
             if (filter.tags.isNotEmpty()) {
                 for (tag in filter.tags) {
-                    addQueryParameter("genres[]", tag.key)
+                    url.addQueryParameter("genres[]", tag.key)
                 }
             } else {
                 // Default exclusions (Adult/Hentai/Smut/Ecchi) matching Lua/Web behavior
                 listOf("87264", "87266", "87268", "87265").forEach {
-                    addQueryParameter("genres[]", "-$it")
+                    url.addQueryParameter("genres[]", "-$it")
                 }
             }
 
-            addQueryParameter("limit", pageSize.toString())
-            addQueryParameter("page", page.toString())
-        }.build()
+            url.addQueryParameter("limit", pageSize.toString())
+            url.addQueryParameter("page", page.toString())
 
-        val response = webClient.httpGet(url).parseJson()
+        val response = webClient.httpGet(url.build()).parseJson()
         val result = response.getJSONObject("result")
         val items = result.getJSONArray("items")
 
@@ -121,7 +123,10 @@ internal class Comix(context: MangaLoaderContext) :
         val hashId = manga.url.substringAfter("/title/").substringBefore("-")
 
         // Fetch details from API (Lua: includes[]=author&includes[]=artist...)
-        val detailsUrl = "https://${domain}/api/v2/manga/$hashId".toHttpUrl().newBuilder()
+		val detailsUrl = urlBuilder()
+			.host(domain)
+			.addPathSegments(apiSuffix)
+			.addPathSegment(hashId)
             .addQueryParameter("includes[]", "author")
             .addQueryParameter("includes[]", "artist")
             .addQueryParameter("includes[]", "genre")
@@ -178,7 +183,11 @@ internal class Comix(context: MangaLoaderContext) :
 
         // 1. Fetch all pages of chapters
         do {
-            val chaptersUrl = "https://${domain}/api/v2/manga/$hashId/chapters".toHttpUrl().newBuilder()
+            val chaptersUrl = urlBuilder()
+				.host(domain)
+				.addPathSegments(apiSuffix)
+				.addPathSegment(hashId)
+				.addPathSegment("chapters")
                 .addQueryParameter("order[number]", "asc") // Lua uses asc, we can sort later
                 .addQueryParameter("limit", "100")
                 .addQueryParameter("page", page.toString())
@@ -269,7 +278,7 @@ internal class Comix(context: MangaLoaderContext) :
                 title = fullTitle.ifEmpty { "Chapter ${number.niceString()}" },
                 number = number,
                 volume = volume.toIntOrNull() ?: 0,
-                url = "/chapters/$chapterId", // API endpoint suffix for pages
+                url = "chapters/$chapterId", // API endpoint suffix for pages
                 uploadDate = createdAt * 1000L,
                 source = source,
                 scanlator = scanlatorName,
@@ -293,8 +302,11 @@ internal class Comix(context: MangaLoaderContext) :
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         // Lua: API_URL .. '/chapters' .. URL
         // Chapter.url was set to "/chapters/12345"
-        val apiUrl = "https://${domain}/api/v2${chapter.url}"
-
+		val apiUrl = urlBuilder().host(domain)
+			.addPathSegments(apiSuffix)
+			.removePathSegment(2)
+			.addPathSegments(chapter.url)
+			.build()
         val response = webClient.httpGet(apiUrl).parseJson()
         val result = response.getJSONObject("result")
         val images = result.getJSONArray("images")
