@@ -37,8 +37,13 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 	pageSize = 20,
 ) {
 	override val configKeyDomain = ConfigKey.Domain("mediocretoons.com")
-	private val apiUrl = "https://api.mediocretoons.com"
-	private val cdnUrl = "https://storage.mediocretoons.com"
+	private val apiUrl = "https://api.mediocretoons.site"
+	private val cdnUrl = "https://cdn.mediocretoons.site"
+
+	override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
+		.add("Referer", "https://mediocretoons.com/")
+		.add("X-App-Key", "toons-mediocre-app")
+		.build()
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
 		SortOrder.UPDATED,
@@ -66,32 +71,35 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 		)
 	}
 
-	private val apiHeaders: Headers
-		get() = Headers.Builder().add("Referer", "https://$domain/").add("Origin", "https://$domain").build()
-
 	private val chapterDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", sourceLocale)
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+
 		val url = when {
+			// This part remains the same for handling searches and filters.
 			!filter.query.isNullOrEmpty() || filter.tags.isNotEmpty() || filter.states.isNotEmpty() || filter.types.isNotEmpty() -> buildSearchUrl(
 				page,
 				filter,
 			)
 
+			// This is the modified block for the default "latest" or "recent" list.
 			else -> {
-				"$apiUrl/obras".toHttpUrl().newBuilder().addQueryParameter("limite", pageSize.toString())
-					.addQueryParameter("pagina", page.toString()).addQueryParameter("temCapitulo", "true").build()
+				"$apiUrl/obras/recentes".toHttpUrl().newBuilder()
+					.addQueryParameter("limite", pageSize.toString()) // Or a fixed "20" if you prefer
+					.addQueryParameter("pagina", page.toString())
+					.addQueryParameter("formato", "5") // Added the new required parameter
+					.build()
 			}
 		}
 
-		val response = webClient.httpGet(url, apiHeaders).parseJson()
+		val response = webClient.httpGet(url).parseJson()
 		val results = response.optJSONArray("data") ?: return emptyList()
 		return results.mapJSON { parseMangaFromJson(it) }
 	}
 
 	private fun buildSearchUrl(page: Int, filter: MangaListFilter): HttpUrl {
 		val builder = "$apiUrl/obras".toHttpUrl().newBuilder().addQueryParameter("limite", pageSize.toString())
-			.addQueryParameter("pagina", page.toString()).addQueryParameter("temCapitulo", "true")
+			.addQueryParameter("pagina", page.toString())
 
 		// Add search query
 		if (!filter.query.isNullOrEmpty()) {
@@ -163,7 +171,7 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 
 	override suspend fun getDetails(manga: Manga): Manga {
 		val mangaId = manga.url.substringAfter("/obra/").substringBefore("/")
-		val response = webClient.httpGet("$apiUrl/obras/$mangaId", apiHeaders).parseJson()
+		val response = webClient.httpGet("$apiUrl/obras/$mangaId").parseJson()
 
 		val description = response.optString("descricao").replace(Regex("</?[^>]+>"), "").replace("\\/", "/")
 			.replace(Regex("\\s+"), " ").trim()
@@ -223,7 +231,7 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val chapterId = chapter.url.substringAfter("/capitulo/")
 
-		val response = webClient.httpGet("$apiUrl/capitulos/$chapterId", apiHeaders).parseJson()
+		val response = webClient.httpGet("$apiUrl/capitulos/$chapterId").parseJson()
 
 		val pagesArray = response.optJSONArray("paginas") ?: throw Exception("No pages found in chapter")
 
@@ -252,7 +260,7 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 
 	private suspend fun fetchAvailableTags(): Set<MangaTag> {
 		val url = "$apiUrl/tags"
-		val body = webClient.httpGet(url, apiHeaders).body?.string()?.trim()
+		val body = webClient.httpGet(url).body?.string()?.trim()
 
 		if (body == null) return emptySet()
 
