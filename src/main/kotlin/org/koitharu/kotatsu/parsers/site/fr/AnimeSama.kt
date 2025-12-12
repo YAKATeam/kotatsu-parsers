@@ -1,8 +1,10 @@
 package org.koitharu.kotatsu.parsers.site.fr
 
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -22,8 +24,6 @@ import org.koitharu.kotatsu.parsers.util.generateUid
 import org.koitharu.kotatsu.parsers.util.parseHtml
 import org.koitharu.kotatsu.parsers.util.parseJson
 import org.koitharu.kotatsu.parsers.util.parseRaw
-import org.koitharu.kotatsu.parsers.util.requireSrc
-import org.koitharu.kotatsu.parsers.util.splitByWhitespace
 import org.koitharu.kotatsu.parsers.util.toRelativeUrl
 import org.koitharu.kotatsu.parsers.util.urlDecode
 import org.koitharu.kotatsu.parsers.util.urlEncoded
@@ -31,9 +31,9 @@ import java.util.EnumSet
 
 @MangaSourceParser("ANIMESAMA", "AnimeSama", "fr")
 internal class AnimeSama(context: MangaLoaderContext) :
-	PagedMangaParser(context, source = MangaParserSource.ANIMESAMA, 48) {
+	PagedMangaParser(context, source = MangaParserSource.ANIMESAMA, 96) {
 
-	override val configKeyDomain = ConfigKey.Domain("anime-sama.org")
+	override val configKeyDomain = ConfigKey.Domain("anime-sama.eu")
 	private val baseUrl = "https://$domain"
 	private val cdnUrl = "$baseUrl/s2/scans/"
 
@@ -42,6 +42,7 @@ internal class AnimeSama(context: MangaLoaderContext) :
 		.build()
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+		SortOrder.UPDATED,
 		SortOrder.ALPHABETICAL,
 	)
 
@@ -53,9 +54,16 @@ internal class AnimeSama(context: MangaLoaderContext) :
 
 	override suspend fun getFilterOptions(): MangaListFilterOptions {
 		val doc = webClient.httpGet("$baseUrl/catalogue").parseHtml()
-		val genres = doc.select("div#genreList span").mapNotNull { labelElement ->
-            val tag = labelElement.text()
-            MangaTag(tag, tag, source)
+		val genres = doc.select("#genreList label.filter-checkbox-item").mapNotNull { labelElement ->
+			val input = labelElement.selectFirst("input.filter-checkbox[name=\"genre[]\"]") ?: return@mapNotNull null
+			val spanElement = labelElement.selectFirst("span") ?: return@mapNotNull null
+			val labelText = spanElement.text()
+			val value = input.attr("value")
+			MangaTag(
+				key = value,
+				title = labelText,
+				source = source,
+			)
 		}.toSet()
 
 		return MangaListFilterOptions(
@@ -64,54 +72,108 @@ internal class AnimeSama(context: MangaLoaderContext) :
 	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-        val url = "$baseUrl/catalogue".toHttpUrl().newBuilder()
+		val url = buildListUrl(page, order, filter)
+		val doc = webClient.httpGet(url).parseHtml()
+		return parseCataloguePage(doc)
+	}
 
-        // keyword
-        val encodedQuery = filter.query?.splitByWhitespace()?.joinToString(separator = "+") { part ->
-            part.urlEncoded()
-        }.orEmpty()
-        url.addQueryParameter("search", encodedQuery)
+	private fun buildListUrl(page: Int, order: SortOrder, filter: MangaListFilter): HttpUrl {
+		return "$baseUrl/catalogue".toHttpUrl().newBuilder()
+			.addQueryParameter("type[]", "Scans")
+			.apply {
+				// Add search parameter (empty if no query)
+				addQueryParameter("search", filter.query ?: "")
 
-        // genres
-        if (filter.tags.isNotEmpty()) {
-            filter.tags.forEach {
-                url.addQueryParameter("genres[]", it.key)
-            }
-        }
+				// Add genre filters
+				filter.tags.forEach { tag ->
+					addQueryParameter("genre[]", tag.key)
+				}
 
-        if (page > 1) {
-            url.addQueryParameter("page", page.toString())
-        }
-
-		val doc = webClient.httpGet(url.toString()).parseHtml()
-        return parseCataloguePage(doc)
+				// Add page parameter (only if not page 1)
+				if (page > 1) {
+					addQueryParameter("page", page.toString())
+				}
+			}
+			.build()
 	}
 
 	private fun parseCataloguePage(doc: Document): List<Manga> {
-		return doc.select("div.shrink-0.catalog-card.card-base").mapNotNull { element ->
+		return doc.select("div.catalog-card").mapNotNull { element ->
 			val a = element.selectFirst("a") ?: return@mapNotNull null
-			val title = element.selectFirst("h2")?.text() ?: return@mapNotNull null
-			val cover = element.selectFirst("img")?.requireSrc()
+			val title = element.selectFirst("h2.card-title")?.text() ?: return@mapNotNull null
+			val cover = element.selectFirst("img.card-image")?.attr("src") ?: return@mapNotNull null
 			val href = a.attr("href").removeSuffix("/")
-			Manga(
-                id = generateUid(href),
-                title = normalizeTitle(title),
-                altTitles = emptySet(),
-                url = href.toRelativeUrl(domain),
-                publicUrl = href,
-                rating = RATING_UNKNOWN,
-                contentRating = ContentRating.SAFE,
-                coverUrl = cover,
-                largeCoverUrl = null,
-                tags = emptySet(),
-                state = null,
-                authors = emptySet(),
-                description = null,
-                chapters = null,
-                source = source,
-            )
+
+			createManga(
+				href = href,
+				title = title,
+				cover = cover
+			)
 		}
 	}
+
+	private fun parseHomePageScans(doc: Document): List<Manga> {
+		val mangaList = mutableListOf<Manga>()
+		val seenUrls = mutableSetOf<String>()
+
+		doc.select("#containerAjoutsScans > div").forEach { element ->
+			parseHomePageManga(element)?.let { manga ->
+				if (seenUrls.add(manga.url)) {
+					mangaList.add(manga)
+				}
+			}
+		}
+
+		val selectors = listOf("#containerSorties", "#containerClassiques", "#containerPepites")
+		doc.select(selectors.joinToString(", ") { "$it > div" }).forEach { element ->
+			parseHorizontalManga(element)?.let { manga ->
+				if (manga.url.contains("/scan") && seenUrls.add(manga.url)) {
+					mangaList.add(manga)
+				}
+			}
+		}
+
+		return mangaList
+	}
+
+	private fun parseHorizontalManga(element: Element): Manga? {
+		val a = element.selectFirst("a") ?: return null
+		val title = element.selectFirst("h1")?.text() ?: return null
+		val cover = element.selectFirst("img")?.attr("src") ?: return null
+
+		val href = a.attr("href")
+		val types = element.select("p").getOrNull(2)?.text().orEmpty()
+		if (!types.contains("Scans")) return null
+
+		return createManga(href, title, cover)
+	}
+
+	private fun parseHomePageManga(element: Element): Manga? {
+		val a = element.selectFirst("a") ?: return null
+		val title = element.selectFirst("h1")?.text() ?: return null
+		val cover = element.selectFirst("img")?.attr("src") ?: return null
+		val href = a.attr("href").removeSuffix("/scan/vf/")
+
+		return createManga(href, title, cover)
+	}
+
+	private fun createManga(href: String, title: String, cover: String) = Manga(
+		id = generateUid(href),
+		title = normalizeTitle(title),
+		altTitles = emptySet(),
+		url = href.toRelativeUrl(domain),
+		publicUrl = href,
+		rating = RATING_UNKNOWN,
+		contentRating = ContentRating.SAFE,
+		coverUrl = cover,
+		largeCoverUrl = null,
+		tags = emptySet(),
+		state = null,
+		authors = emptySet(),
+		description = null,
+		chapters = null,
+		source = source,
+	)
 
 	override suspend fun getDetails(manga: Manga): Manga {
 		val doc = webClient.httpGet(manga.publicUrl.toHttpUrl()).parseHtml()
