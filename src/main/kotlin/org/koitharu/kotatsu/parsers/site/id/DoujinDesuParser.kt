@@ -50,57 +50,76 @@ internal class DoujinDesuParser(context: MangaLoaderContext) :
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		val url = urlBuilder().apply {
-            addPathSegment("manga")
 
+			if (!filter.author.isNullOrEmpty()) {
+				// --- BRANCH 1: Author Page ---
+				// URL Format: https://doujindesu.tv/author/{author-slug}?page={page}
+				// Author page only supports pagination, no sorting or other filters.
+
+				addPathSegment("author")
+				addPathSegment(spaceToHyphen(filter.author))
+
+			} else {
+				// --- BRANCH 2: Standard Manga List ---
+				// URL Format: https://doujindesu.tv/manga?title={...}&order={...}
+
+				addPathSegment("manga")
+
+				// 1. Title Search
+				if (!filter.query.isNullOrEmpty()) {
+					addQueryParameter("title", filter.query)
+				}
+
+				// 2. Sorting (Moved inside 'else' because Author page doesn't support it)
+				addQueryParameter(
+					"order",
+					when (order) {
+						SortOrder.UPDATED -> "updated"
+						SortOrder.POPULARITY -> "popular"
+						SortOrder.ALPHABETICAL -> "title"
+						SortOrder.NEWEST -> "created"
+						else -> "latest"
+					}
+				)
+
+				// 3. Genres/Tags
+				filter.tags.forEach { tag ->
+					addEncodedQueryParameter("genre[]".urlEncoded(), tag.key.urlEncoded())
+				}
+
+				// 4. Status Filter
+				filter.states.oneOrThrowIfMany()?.let { state ->
+					val statusValue = when (state) {
+						MangaState.ONGOING -> "publishing"
+						MangaState.FINISHED -> "finished"
+						else -> null
+					}
+					if (!statusValue.isNullOrEmpty()) {
+						addQueryParameter("statusx", statusValue)
+					}
+				}
+
+				// 5. Content Type Filter
+				filter.types.oneOrThrowIfMany()?.let { type ->
+					val typeValue = when (type) {
+						ContentType.MANGA -> "Manga"
+						ContentType.MANHWA -> "Manhwa"
+						ContentType.DOUJINSHI -> "Doujinshi"
+						else -> null
+					}
+					if (!typeValue.isNullOrEmpty()) {
+						addQueryParameter("type", typeValue)
+					}
+				}
+			}
+
+			// --- GLOBAL PARAMETERS ---
+
+			// Pagination is the only common parameter for both pages
 			if (page > 1) {
 				addQueryParameter("page", page.toString())
 			}
 
-			if (!filter.query.isNullOrEmpty()) {
-				addQueryParameter("title", filter.query)
-			}
-
-			if (!filter.author.isNullOrEmpty()) {
-				addQueryParameter("author", space2plus(filter.author).lowercase())
-			}
-
-			addQueryParameter(
-				"order",
-				when (order) {
-					SortOrder.UPDATED -> "updated"
-					SortOrder.POPULARITY -> "popular"
-					SortOrder.ALPHABETICAL -> "title"
-					SortOrder.NEWEST -> "created"
-					else -> "latest"
-				},
-			)
-
-			filter.tags.forEach {
-				addEncodedQueryParameter("genre[]".urlEncoded(), it.key.urlEncoded())
-			}
-
-			filter.states.oneOrThrowIfMany()?.let {
-				addEncodedQueryParameter(
-					"statusx",
-					when (it) {
-						MangaState.ONGOING -> "publishing"
-						MangaState.FINISHED -> "finished"
-						else -> ""
-					},
-				)
-			}
-
-			filter.types.oneOrThrowIfMany()?.let {
-				addQueryParameter(
-					"typex",
-					when (it) {
-						ContentType.MANGA -> "Manga"
-						ContentType.MANHWA -> "Manhwa"
-						ContentType.DOUJINSHI -> "Doujinshi"
-						else -> ""
-					},
-				)
-			}
 		}.build()
 
 		return webClient.httpGet(url).parseHtml()
@@ -202,4 +221,8 @@ internal class DoujinDesuParser(context: MangaLoaderContext) :
 	}
 
     private fun space2plus(input: String): String = input.replace(' ', '+')
+
+	private fun spaceToHyphen(input: String): String {
+		return input.trim().lowercase().replace(" ", "-")
+	}
 }
