@@ -1,6 +1,8 @@
 package org.koitharu.kotatsu.parsers.site.all
 
 import androidx.collection.ArraySet
+import okhttp3.Interceptor
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.nodes.Element
@@ -11,393 +13,460 @@ import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
+import org.koitharu.kotatsu.parsers.network.OkHttpWebClient
+import org.koitharu.kotatsu.parsers.network.WebClient
 import org.koitharu.kotatsu.parsers.util.*
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.*
+import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 @MangaSourceParser("BATOTO", "Bato.To")
 internal class BatoToParser(context: MangaLoaderContext) : PagedMangaParser(
-	context = context,
-	source = MangaParserSource.BATOTO,
-	pageSize = 60,
-	searchPageSize = 20,
-), MangaParserAuthProvider {
+    context = context,
+    source = MangaParserSource.BATOTO,
+    pageSize = 60,
+    searchPageSize = 20,
+), MangaParserAuthProvider, Interceptor {
 
-	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
-		super.onCreateConfig(keys)
-		keys.add(userAgentKey)
-	}
+    override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+        super.onCreateConfig(keys)
+        keys.add(userAgentKey)
+    }
 
-	override val authUrl: String
-		get() = "https://${domain}/signin"
+    // FIX 1: Wire up the interceptor to the webClient
+    override val webClient: WebClient by lazy {
+        val client = context.httpClient.newBuilder()
+            .addInterceptor(this)
+            .build()
+        OkHttpWebClient(client, source)
+    }
 
-	override suspend fun isAuthorized(): Boolean {
-		return context.cookieJar.getCookies(domain).any {
-			it.name.contains("skey")
-		}
-	}
+    override val authUrl: String
+        get() = "https://${domain}/signin"
 
-	override suspend fun getUsername(): String {
-		val body = webClient.httpGet("https://${domain}/account/profiles").parseHtml().body()
-		return body.selectFirst("ul.toggleMenu-content:has(.avatar):has(a) div.text-center div")?.text()
-			?: body.parseFailed("Cannot find username")
-	}
+    override suspend fun isAuthorized(): Boolean {
+        return context.cookieJar.getCookies(domain).any {
+            it.name.contains("skey")
+        }
+    }
 
-	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
-		SortOrder.ALPHABETICAL,
-		SortOrder.UPDATED,
-		SortOrder.NEWEST,
-		SortOrder.POPULARITY,
-		SortOrder.POPULARITY_YEAR,
-		SortOrder.POPULARITY_MONTH,
-		SortOrder.POPULARITY_WEEK,
-		SortOrder.POPULARITY_TODAY,
-		SortOrder.POPULARITY_HOUR,
-	)
+    override suspend fun getUsername(): String {
+        val body = webClient.httpGet("https://${domain}/account/profiles").parseHtml().body()
+        return body.selectFirst("ul.toggleMenu-content:has(.avatar):has(a) div.text-center div")?.text()
+            ?: body.parseFailed("Cannot find username")
+    }
 
-	override val filterCapabilities: MangaListFilterCapabilities
-		get() = MangaListFilterCapabilities(
-			isMultipleTagsSupported = true,
-			isTagsExclusionSupported = true,
-			isSearchSupported = true,
-			isOriginalLocaleSupported = true,
-		)
+    // FIX 2: Add Image Fallback constants (Ported from Tachiyomi)
+    companion object {
+        private val SERVER_PATTERN = Regex("https://[a-zA-Z]\\d{2}")
+        // Sorted list: Most reliable servers FIRST
+        private val FALLBACK_SERVERS = listOf(
+            "k03", "k06", "k07", "k00", "k01", "k02", "k04", "k05", "k08", "k09", 
+            "n03", "n00", "n01", "n02", "n04", "n05", "n06", "n07", "n08", "n09", "n10"
+        )
+    }
 
-	override suspend fun getFilterOptions() = MangaListFilterOptions(
-		availableTags = fetchAvailableTags(),
-		availableStates = EnumSet.of(
-			MangaState.ONGOING,
-			MangaState.FINISHED,
-			MangaState.ABANDONED,
-			MangaState.PAUSED,
-			MangaState.UPCOMING,
-		),
-		availableContentRating = EnumSet.of(ContentRating.SAFE),
-		availableLocales = setOf(
-			Locale.CHINESE, Locale.ENGLISH, Locale.US, Locale.FRENCH, Locale.GERMAN, Locale.ITALIAN, Locale.JAPANESE,
-			Locale("af"), Locale("ar"), Locale("az"), Locale("eu"), Locale("be"),
-			Locale("bn"), Locale("bs"), Locale("bg"), Locale("my"), Locale("km"),
-			Locale("ceb"), Locale("zh_hk"), Locale("zh_tw"), Locale("hr"), Locale("cs"),
-			Locale("da"), Locale("nl"), Locale("eo"), Locale("et"), Locale("fil"),
-			Locale("fi"), Locale("ka"), Locale("el"), Locale("ht"), Locale("he"),
-			Locale("hi"), Locale("hu"), Locale("id"), Locale("kk"), Locale("ko"),
-			Locale("lv"), Locale("ms"), Locale("ml"), Locale("mo"), Locale("mn"),
-			Locale("ne"), Locale("no"), Locale("fa"), Locale("pl"), Locale("pt"),
-			Locale("pt_br"), Locale("pt_pt"), Locale("ro"), Locale("ru"), Locale("sr"),
-			Locale("si"), Locale("sk"), Locale("es"), Locale("es_419"), Locale("ta"),
-			Locale("te"), Locale("th"), Locale("ti"), Locale("tr"), Locale("uk"),
-			Locale("vi"), Locale("zu"),
-		),
-	)
+    // FIX 3: Implement Interceptor with Fallback Logic
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        val response = chain.proceed(request)
 
-	override val configKeyDomain = ConfigKey.Domain(
-		"bato.to",
-		"batocomic.com",
-		"batocomic.net",
-		"batocomic.org",
-		"batotoo.com",
-		"batotwo.com",
-		"battwo.com",
-		"comiko.net",
-		"comiko.org",
-		"mangatoto.com",
-		"mangatoto.net",
-		"mangatoto.org",
-		"readtoto.com",
-		"readtoto.net",
-		"readtoto.org",
-		"dto.to",
-		"hto.to",
-		"mto.to",
-		"wto.to",
-		"xbato.com",
-		"xbato.net",
-		"xbato.org",
-		"zbato.com",
-		"zbato.net",
-		"zbato.org",
-		"fto.to",
-		"jto.to",
-	)
+        if (response.isSuccessful) return response
 
-	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		when {
-			!filter.query.isNullOrEmpty() -> {
-				return search(page, filter.query)
-			}
+        val urlString = request.url.toString()
 
-			else -> {
+        // Close the failed response body to prevent leaks
+        response.close()
 
-				val url = buildString {
-					append("https://")
-					append(domain)
+        // Check if this is an image server URL
+        if (SERVER_PATTERN.containsMatchIn(urlString)) {
+            for (server in FALLBACK_SERVERS) {
+                val newUrl = urlString.replace(SERVER_PATTERN, "https://$server")
 
-					append("/browse?sort=")
-					when (order) {
-						SortOrder.UPDATED -> append("update.za")
-						SortOrder.POPULARITY -> append("views_a.za")
-						SortOrder.NEWEST -> append("create.za")
-						SortOrder.ALPHABETICAL -> append("title.az")
-						SortOrder.POPULARITY_YEAR -> append("views_y.za")
-						SortOrder.POPULARITY_MONTH -> append("views_m.za")
-						SortOrder.POPULARITY_WEEK -> append("views_w.za")
-						SortOrder.POPULARITY_TODAY -> append("views_d.za")
-						SortOrder.POPULARITY_HOUR -> append("views_h.za")
-						else -> append("update.za")
-					}
+                // Skip if we are about to try the exact same URL that just failed
+                if (newUrl == urlString) continue
 
-					filter.states.oneOrThrowIfMany()?.let {
-						append("&release=")
-						append(
-							when (it) {
-								MangaState.ONGOING -> "ongoing"
-								MangaState.FINISHED -> "completed"
-								MangaState.ABANDONED -> "cancelled"
-								MangaState.PAUSED -> "hiatus"
-								MangaState.UPCOMING -> "pending"
-								else -> throw IllegalArgumentException("$it not supported")
-							},
-						)
-					}
+                val newRequest = request.newBuilder()
+                    .url(newUrl)
+                    .build()
 
-					filter.locale?.let {
-						append("&langs=")
-						if (it.language == "in") {
-							append("id")
-						} else {
-							append(it.language)
-						}
+                try {
+                    // Force short timeouts for fallbacks to avoid long hangs
+                    val newResponse = chain
+                        .withConnectTimeout(5, TimeUnit.SECONDS)
+                        .withReadTimeout(10, TimeUnit.SECONDS)
+                        .proceed(newRequest)
 
-					}
+                    if (newResponse.isSuccessful) {
+                        return newResponse
+                    }
+                    // If this server also failed, close and loop to the next one
+                    newResponse.close()
+                } catch (e: Exception) {
+                    // Connection error on this mirror, ignore and loop to next
+                }
+            }
+        }
 
-					filter.originalLocale?.let {
-						append("&origs=")
-						if (it.language == "in") {
-							append("id")
-						} else {
-							append(it.language)
-						}
-					}
+        // If everything failed, re-run original request to return the standard error
+        return chain.proceed(request)
+    }
 
-					append("&genres=")
-					if (filter.tags.isNotEmpty()) {
-						filter.tags.joinTo(this, ",") { it.key }
-					}
+    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+        SortOrder.ALPHABETICAL,
+        SortOrder.UPDATED,
+        SortOrder.NEWEST,
+        SortOrder.POPULARITY,
+        SortOrder.POPULARITY_YEAR,
+        SortOrder.POPULARITY_MONTH,
+        SortOrder.POPULARITY_WEEK,
+        SortOrder.POPULARITY_TODAY,
+        SortOrder.POPULARITY_HOUR,
+    )
 
-					append("|")
-					if (filter.tagsExclude.isNotEmpty()) {
-						filter.tagsExclude.joinTo(this, ",") { it.key }
-					}
+    override val filterCapabilities: MangaListFilterCapabilities
+        get() = MangaListFilterCapabilities(
+            isMultipleTagsSupported = true,
+            isTagsExclusionSupported = true,
+            isSearchSupported = true,
+            isOriginalLocaleSupported = true,
+        )
 
-					if (filter.contentRating.isNotEmpty()) {
-						filter.contentRating.oneOrThrowIfMany()?.let {
-							append(
-								when (it) {
-									ContentRating.SAFE -> append(",gore,bloody,violence,ecchi,adult,mature,smut,hentai")
-									else -> append("")
-								},
-							)
-						}
-					}
+    override suspend fun getFilterOptions() = MangaListFilterOptions(
+        availableTags = fetchAvailableTags(),
+        availableStates = EnumSet.of(
+            MangaState.ONGOING,
+            MangaState.FINISHED,
+            MangaState.ABANDONED,
+            MangaState.PAUSED,
+            MangaState.UPCOMING,
+        ),
+        availableContentRating = EnumSet.of(ContentRating.SAFE),
+        availableLocales = setOf(
+            Locale.CHINESE, Locale.ENGLISH, Locale.US, Locale.FRENCH, Locale.GERMAN, Locale.ITALIAN, Locale.JAPANESE,
+            Locale("af"), Locale("ar"), Locale("az"), Locale("eu"), Locale("be"),
+            Locale("bn"), Locale("bs"), Locale("bg"), Locale("my"), Locale("km"),
+            Locale("ceb"), Locale("zh_hk"), Locale("zh_tw"), Locale("hr"), Locale("cs"),
+            Locale("da"), Locale("nl"), Locale("eo"), Locale("et"), Locale("fil"),
+            Locale("fi"), Locale("ka"), Locale("el"), Locale("ht"), Locale("he"),
+            Locale("hi"), Locale("hu"), Locale("id"), Locale("kk"), Locale("ko"),
+            Locale("lv"), Locale("ms"), Locale("ml"), Locale("mo"), Locale("mn"),
+            Locale("ne"), Locale("no"), Locale("fa"), Locale("pl"), Locale("pt"),
+            Locale("pt_br"), Locale("pt_pt"), Locale("ro"), Locale("ru"), Locale("sr"),
+            Locale("si"), Locale("sk"), Locale("es"), Locale("es_419"), Locale("ta"),
+            Locale("te"), Locale("th"), Locale("ti"), Locale("tr"), Locale("uk"),
+            Locale("vi"), Locale("zu"),
+        ),
+    )
 
-					append("&page=")
-					append(page.toString())
-				}
+    override val configKeyDomain = ConfigKey.Domain(
+        "bato.to",
+        "batocomic.com",
+        "batocomic.net",
+        "batocomic.org",
+        "batotoo.com",
+        "batotwo.com",
+        "battwo.com",
+        "comiko.net",
+        "comiko.org",
+        "mangatoto.com",
+        "mangatoto.net",
+        "mangatoto.org",
+        "readtoto.com",
+        "readtoto.net",
+        "readtoto.org",
+        "dto.to",
+        "hto.to",
+        "mto.to",
+        "wto.to",
+        "xbato.com",
+        "xbato.net",
+        "xbato.org",
+        "zbato.com",
+        "zbato.net",
+        "zbato.org",
+        "fto.to",
+        "jto.to",
+    )
 
-				return parseList(url, page)
-			}
-		}
-	}
+    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+        when {
+            !filter.query.isNullOrEmpty() -> {
+                return search(page, filter.query)
+            }
 
-	override suspend fun getDetails(manga: Manga): Manga {
-		val root = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
-			.requireElementById("mainer")
-		val details = root.selectFirstOrThrow(".detail-set")
-		val attrs = details.selectFirst(".attr-main")?.select(".attr-item")?.associate {
-			it.child(0).text() to it.child(1)
-		}.orEmpty()
-		val author = attrs["Authors:"]?.textOrNull()
-		return manga.copy(
-			title = root.selectFirst("h3.item-title")?.text() ?: manga.title,
-			contentRating = if (root.selectFirst("alert")?.getElementsContainingOwnText("NSFW").isNullOrEmpty()) {
-				ContentRating.ADULT
-			} else {
-				ContentRating.SAFE
-			},
-			largeCoverUrl = details.selectFirst("img[src]")?.absUrl("src"),
-			description = details.getElementById("limit-height-body-summary")
-				?.selectFirst(".limit-html")
-				?.html(),
-			tags = manga.tags + attrs["Genres:"]?.parseTags().orEmpty(),
-			state = when (attrs["Original work:"]?.text()) {
-				"Ongoing" -> MangaState.ONGOING
-				"Completed" -> MangaState.FINISHED
-				"Cancelled" -> MangaState.ABANDONED
-				"Hiatus" -> MangaState.PAUSED
-				else -> manga.state
-			},
-			authors = author?.let { setOf(it) } ?: manga.authors,
-			chapters = root.selectFirst(".episode-list")
-				?.selectFirst(".main")
-				?.children()
-				?.mapChapters(reversed = true) { i, div ->
-					div.parseChapter(i)
-				}.orEmpty(),
-		)
-	}
+            else -> {
 
-	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val fullUrl = chapter.url.toAbsoluteUrl(domain)
-		val scripts = webClient.httpGet(fullUrl).parseHtml().select("script")
-		for (script in scripts) {
-			val scriptSrc = script.html()
-			val p = scriptSrc.indexOf("const imgHttps =")
-			if (p == -1) continue
-			val start = scriptSrc.indexOf('[', p)
-			val end = scriptSrc.indexOf(';', start)
-			if (start == -1 || end == -1) {
-				continue
-			}
-			val images = JSONArray(scriptSrc.substring(start, end))
-			val batoPass = scriptSrc.substringBetweenFirst("batoPass =", ";")?.trim(' ', '"', '\n')
-				?: script.parseFailed("Cannot find batoPass")
-			val batoWord = scriptSrc.substringBetweenFirst("batoWord =", ";")?.trim(' ', '"', '\n')
-				?: script.parseFailed("Cannot find batoWord")
-			val password = context.evaluateJs(batoPass)?.removeSurrounding('"')
-				?: script.parseFailed("Cannot evaluate batoPass")
-			val args = JSONArray(decryptAES(batoWord, password))
-			val result = ArrayList<MangaPage>(images.length())
-			repeat(images.length()) { i ->
-				val url = images.getString(i)
-				result += MangaPage(
-					id = generateUid(url),
-					url = if (args.length() == 0) url else url + "?" + args.getString(i),
-					preview = null,
-					source = source,
-				)
-			}
-			return result
-		}
-		throw ParseException("Cannot find images list", fullUrl)
-	}
+                val url = buildString {
+                    append("https://")
+                    append(domain)
 
-	private suspend fun fetchAvailableTags(): Set<MangaTag> {
-		val scripts = webClient.httpGet(
-			"https://${domain}/browse",
-		).parseHtml().selectOrThrow("script")
-		for (script in scripts) {
-			val genres = script.html().substringBetweenFirst("const _genres =", ";") ?: continue
-			val jo = JSONObject(genres)
-			val result = ArraySet<MangaTag>(jo.length())
-			jo.keys().forEach { key ->
-				val item = jo.getJSONObject(key)
-				result += MangaTag(
-					title = item.getString("text").toTitleCase(Locale.ENGLISH),
-					key = item.getString("file"),
-					source = source,
-				)
-			}
-			return result
-		}
-		throw ParseException("Cannot find gernes list", scripts[0].baseUri())
-	}
+                    append("/browse?sort=")
+                    when (order) {
+                        SortOrder.UPDATED -> append("update.za")
+                        SortOrder.POPULARITY -> append("views_a.za")
+                        SortOrder.NEWEST -> append("create.za")
+                        SortOrder.ALPHABETICAL -> append("title.az")
+                        SortOrder.POPULARITY_YEAR -> append("views_y.za")
+                        SortOrder.POPULARITY_MONTH -> append("views_m.za")
+                        SortOrder.POPULARITY_WEEK -> append("views_w.za")
+                        SortOrder.POPULARITY_TODAY -> append("views_d.za")
+                        SortOrder.POPULARITY_HOUR -> append("views_h.za")
+                        else -> append("update.za")
+                    }
 
-	private suspend fun search(page: Int, query: String): List<Manga> {
-		val url = buildString {
-			append("https://")
-			append(domain)
-			append("/search?word=")
-			append(query.replace(' ', '+'))
-			append("&page=")
-			append(page)
-		}
-		return parseList(url, page)
-	}
+                    filter.states.oneOrThrowIfMany()?.let {
+                        append("&release=")
+                        append(
+                            when (it) {
+                                MangaState.ONGOING -> "ongoing"
+                                MangaState.FINISHED -> "completed"
+                                MangaState.ABANDONED -> "cancelled"
+                                MangaState.PAUSED -> "hiatus"
+                                MangaState.UPCOMING -> "pending"
+                                else -> throw IllegalArgumentException("$it not supported")
+                            },
+                        )
+                    }
 
-	private fun getActivePage(body: Element): Int = body.select("nav ul.pagination > li.page-item.active")
-		.lastOrNull()
-		?.text()
-		?.toIntOrNull() ?: body.parseFailed("Cannot determine current page")
+                    filter.locale?.let {
+                        append("&langs=")
+                        if (it.language == "in") {
+                            append("id")
+                        } else {
+                            append(it.language)
+                        }
 
-	private suspend fun parseList(url: String, page: Int): List<Manga> {
-		val body = webClient.httpGet(url).parseHtml().body()
-		if (body.selectFirst(".browse-no-matches") != null) {
-			return emptyList()
-		}
-		val activePage = getActivePage(body)
-		if (activePage != page) {
-			return emptyList()
-		}
-		val root = body.requireElementById("series-list")
-		return root.children().map { div ->
-			val a = div.selectFirstOrThrow("a")
-			val href = a.attrAsRelativeUrl("href")
-			val title = div.selectFirstOrThrow(".item-title").text()
-			Manga(
-				id = generateUid(href),
-				title = title,
-				altTitles = setOfNotNull(div.selectFirst(".item-alias")?.textOrNull()?.takeUnless { it == title }),
-				url = href,
-				publicUrl = a.absUrl("href"),
-				rating = RATING_UNKNOWN,
-				contentRating = null,
-				coverUrl = div.selectFirst("img[src]")?.absUrl("src"),
-				largeCoverUrl = null,
-				description = null,
-				tags = div.selectFirst(".item-genre")?.parseTags().orEmpty(),
-				state = null,
-				authors = emptySet(),
-				source = source,
-			)
-		}
-	}
+                    }
 
-	private fun Element.parseTags() = children().mapToSet { span ->
-		val text = span.ownText()
-		MangaTag(
-			title = text.toTitleCase(),
-			key = text.lowercase(Locale.ENGLISH).replace(' ', '_'),
-			source = source,
-		)
-	}
+                    filter.originalLocale?.let {
+                        append("&origs=")
+                        if (it.language == "in") {
+                            append("id")
+                        } else {
+                            append(it.language)
+                        }
+                    }
 
-	private fun Element.parseChapter(index: Int): MangaChapter? {
-		val a = selectFirst("a.chapt") ?: return null
-		val extra = selectFirst(".extra")
-		val href = a.attrAsRelativeUrl("href")
-		return MangaChapter(
-			id = generateUid(href),
-			title = a.textOrNull(),
-			number = index + 1f,
-			volume = 0,
-			url = href,
-			scanlator = extra?.getElementsByAttributeValueContaining("href", "/group/")?.text(),
-			uploadDate = runCatching {
-				parseChapterDate(extra?.select("i")?.lastOrNull()?.ownText())
-			}.getOrDefault(0),
-			branch = null,
-			source = source,
-		)
-	}
+                    append("&genres=")
+                    if (filter.tags.isNotEmpty()) {
+                        filter.tags.joinTo(this, ",") { it.key }
+                    }
 
-	private fun parseChapterDate(date: String?): Long {
-		if (date.isNullOrEmpty()) {
-			return 0
-		}
-		val value = date.substringBefore(' ').toInt()
-		val field = when {
-			"sec" in date -> Calendar.SECOND
-			"min" in date -> Calendar.MINUTE
-			"hour" in date -> Calendar.HOUR
-			"day" in date -> Calendar.DAY_OF_MONTH
-			"week" in date -> Calendar.WEEK_OF_YEAR
-			"month" in date -> Calendar.MONTH
-			"year" in date -> Calendar.YEAR
-			else -> return 0
+                    append("|")
+                    if (filter.tagsExclude.isNotEmpty()) {
+                        filter.tagsExclude.joinTo(this, ",") { it.key }
+                    }
+
+                    if (filter.contentRating.isNotEmpty()) {
+                        filter.contentRating.oneOrThrowIfMany()?.let {
+                            append(
+                                when (it) {
+                                    ContentRating.SAFE -> append(",gore,bloody,violence,ecchi,adult,mature,smut,hentai")
+                                    else -> append("")
+                                },
+                            )
+                        }
+                    }
+
+                    append("&page=")
+                    append(page.toString())
+                }
+
+                return parseList(url, page)
+            }
+        }
+    }
+
+    override suspend fun getDetails(manga: Manga): Manga {
+        val root = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
+            .requireElementById("mainer")
+        val details = root.selectFirstOrThrow(".detail-set")
+        val attrs = details.selectFirst(".attr-main")?.select(".attr-item")?.associate {
+            it.child(0).text() to it.child(1)
+        }.orEmpty()
+        val author = attrs["Authors:"]?.textOrNull()
+        return manga.copy(
+            title = root.selectFirst("h3.item-title")?.text() ?: manga.title,
+            contentRating = if (root.selectFirst("alert")?.getElementsContainingOwnText("NSFW").isNullOrEmpty()) {
+                ContentRating.ADULT
+            } else {
+                ContentRating.SAFE
+            },
+            largeCoverUrl = details.selectFirst("img[src]")?.absUrl("src"),
+            description = details.getElementById("limit-height-body-summary")
+                ?.selectFirst(".limit-html")
+                ?.html(),
+            tags = manga.tags + attrs["Genres:"]?.parseTags().orEmpty(),
+            state = when (attrs["Original work:"]?.text()) {
+                "Ongoing" -> MangaState.ONGOING
+                "Completed" -> MangaState.FINISHED
+                "Cancelled" -> MangaState.ABANDONED
+                "Hiatus" -> MangaState.PAUSED
+                else -> manga.state
+            },
+            authors = author?.let { setOf(it) } ?: manga.authors,
+            chapters = root.selectFirst(".episode-list")
+                ?.selectFirst(".main")
+                ?.children()
+                ?.mapChapters(reversed = true) { i, div ->
+                    div.parseChapter(i)
+                }.orEmpty(),
+        )
+    }
+
+    override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+        val fullUrl = chapter.url.toAbsoluteUrl(domain)
+        val scripts = webClient.httpGet(fullUrl).parseHtml().select("script")
+        for (script in scripts) {
+            val scriptSrc = script.html()
+            val p = scriptSrc.indexOf("const imgHttps =")
+            if (p == -1) continue
+            val start = scriptSrc.indexOf('[', p)
+            val end = scriptSrc.indexOf(';', start)
+            if (start == -1 || end == -1) {
+                continue
+            }
+            val images = JSONArray(scriptSrc.substring(start, end))
+            val batoPass = scriptSrc.substringBetweenFirst("batoPass =", ";")?.trim(' ', '"', '\n')
+                ?: script.parseFailed("Cannot find batoPass")
+            val batoWord = scriptSrc.substringBetweenFirst("batoWord =", ";")?.trim(' ', '"', '\n')
+                ?: script.parseFailed("Cannot find batoWord")
+            val password = context.evaluateJs(batoPass)?.removeSurrounding('"')
+                ?: script.parseFailed("Cannot evaluate batoPass")
+            val args = JSONArray(decryptAES(batoWord, password))
+            val result = ArrayList<MangaPage>(images.length())
+            repeat(images.length()) { i ->
+                val url = images.getString(i)
+                result += MangaPage(
+                    id = generateUid(url),
+                    url = if (args.length() == 0) url else url + "?" + args.getString(i),
+                    preview = null,
+                    source = source,
+                )
+            }
+            return result
+        }
+        throw ParseException("Cannot find images list", fullUrl)
+    }
+
+    private suspend fun fetchAvailableTags(): Set<MangaTag> {
+        val scripts = webClient.httpGet(
+            "https://${domain}/browse",
+        ).parseHtml().selectOrThrow("script")
+        for (script in scripts) {
+            val genres = script.html().substringBetweenFirst("const _genres =", ";") ?: continue
+            val jo = JSONObject(genres)
+            val result = ArraySet<MangaTag>(jo.length())
+            jo.keys().forEach { key ->
+                val item = jo.getJSONObject(key)
+                result += MangaTag(
+                    title = item.getString("text").toTitleCase(Locale.ENGLISH),
+                    key = item.getString("file"),
+                    source = source,
+                )
+            }
+            return result
+        }
+        throw ParseException("Cannot find gernes list", scripts[0].baseUri())
+    }
+
+    private suspend fun search(page: Int, query: String): List<Manga> {
+        val url = buildString {
+            append("https://")
+            append(domain)
+            append("/search?word=")
+            append(query.replace(' ', '+'))
+            append("&page=")
+            append(page)
+        }
+        return parseList(url, page)
+    }
+
+    private fun getActivePage(body: Element): Int = body.select("nav ul.pagination > li.page-item.active")
+        .lastOrNull()
+        ?.text()
+        ?.toIntOrNull() ?: body.parseFailed("Cannot determine current page")
+
+    private suspend fun parseList(url: String, page: Int): List<Manga> {
+        val body = webClient.httpGet(url).parseHtml().body()
+        if (body.selectFirst(".browse-no-matches") != null) {
+            return emptyList()
+        }
+        val activePage = getActivePage(body)
+        if (activePage != page) {
+            return emptyList()
+        }
+        val root = body.requireElementById("series-list")
+        return root.children().map { div ->
+            val a = div.selectFirstOrThrow("a")
+            val href = a.attrAsRelativeUrl("href")
+            val title = div.selectFirstOrThrow(".item-title").text()
+            Manga(
+                id = generateUid(href),
+                title = title,
+                altTitles = setOfNotNull(div.selectFirst(".item-alias")?.textOrNull()?.takeUnless { it == title }),
+                url = href,
+                publicUrl = a.absUrl("href"),
+                rating = RATING_UNKNOWN,
+                contentRating = null,
+                coverUrl = div.selectFirst("img[src]")?.absUrl("src"),
+                largeCoverUrl = null,
+                description = null,
+                tags = div.selectFirst(".item-genre")?.parseTags().orEmpty(),
+                state = null,
+                authors = emptySet(),
+                source = source,
+            )
+        }
+    }
+
+    private fun Element.parseTags() = children().mapToSet { span ->
+        val text = span.ownText()
+        MangaTag(
+            title = text.toTitleCase(),
+            key = text.lowercase(Locale.ENGLISH).replace(' ', '_'),
+            source = source,
+        )
+    }
+
+    private fun Element.parseChapter(index: Int): MangaChapter? {
+        val a = selectFirst("a.chapt") ?: return null
+        val extra = selectFirst(".extra")
+        val href = a.attrAsRelativeUrl("href")
+        return MangaChapter(
+            id = generateUid(href),
+            title = a.textOrNull(),
+            number = index + 1f,
+            volume = 0,
+            url = href,
+            scanlator = extra?.getElementsByAttributeValueContaining("href", "/group/")?.text(),
+            uploadDate = runCatching {
+                parseChapterDate(extra?.select("i")?.lastOrNull()?.ownText())
+            }.getOrDefault(0),
+            branch = null,
+            source = source,
+        )
+    }
+
+    private fun parseChapterDate(date: String?): Long {
+        if (date.isNullOrEmpty()) {
+            return 0
+        }
+        val value = date.substringBefore(' ').toInt()
+        val field = when {
+            "sec" in date -> Calendar.SECOND
+            "min" in date -> Calendar.MINUTE
+            "hour" in date -> Calendar.HOUR
+            "day" in date -> Calendar.DAY_OF_MONTH
+            "week" in date -> Calendar.WEEK_OF_YEAR
+            "month" in date -> Calendar.MONTH
+            "year" in date -> Calendar.YEAR
+            else -> return 0
 		}
 		val calendar = Calendar.getInstance()
 		calendar.add(field, -value)
