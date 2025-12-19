@@ -12,7 +12,7 @@ import java.util.*
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import android.util.Base64
+import java.util.Base64 
 
 @MangaSourceParser("MANGAGO", "MangaGo", "en")
 internal class MangaGo(context: MangaLoaderContext) :
@@ -48,18 +48,16 @@ internal class MangaGo(context: MangaLoaderContext) :
         val url = if (!filter.query.isNullOrEmpty()) {
             "https://$domain/r/l_search/?name=${filter.query.urlEncoded()}&page=$page"
         } else {
-            // Genre filtering or default listing
             val genre = filter.tags.firstOrNull()?.key ?: "All"
             "https://$domain/genre/$genre/$page/?$sortParam"
         }
 
         val doc = webClient.httpGet(url).parseHtml()
         
-        // Selector differs slightly between search and directory
         val items = if (url.contains("l_search")) {
-            doc.select("div.row") // Search result items
+            doc.select("div.row")
         } else {
-            doc.select("ul#search_list > li") // Directory items
+            doc.select("ul#search_list > li")
         }
 
         return items.mapNotNull { element ->
@@ -109,7 +107,7 @@ internal class MangaGo(context: MangaLoaderContext) :
             MangaChapter(
                 id = generateUid(href),
                 title = title,
-                number = -1f, // Standard regex parsing could be added here
+                number = -1f,
                 volume = 0,
                 url = href,
                 uploadDate = parseDate(dateText),
@@ -140,7 +138,8 @@ internal class MangaGo(context: MangaLoaderContext) :
         val jsUrl = doc.select("script[src*='chapter.js']").attr("abs:src")
         if (jsUrl.isEmpty()) throw Exception("Chapter JS not found")
         
-        val jsContent = webClient.httpGet(jsUrl).parseJson<String>() // Fetch raw string
+        // FIX: Use body?.string() instead of parseJson() to get raw text
+        val jsContent = webClient.httpGet(jsUrl).body?.string() ?: throw Exception("Empty JS content")
 
         // 3. Extract AES Key and IV using Regex
         val keyHex = Regex("""CryptoJS\.enc\.Hex\.parse\("([0-9a-fA-F]+)"\)""").findAll(jsContent)
@@ -152,8 +151,7 @@ internal class MangaGo(context: MangaLoaderContext) :
         // 4. AES Decrypt
         val decryptedString = decryptAes(imgsrcsBase64, keyHex, ivHex)
 
-        // 5. Unscramble the String (Ported from Lua)
-        // Find indices in the JS: str.charAt(123)
+        // 5. Unscramble the String
         val keyLocations = Regex("""str\.charAt\(\s*(\d+)\s*\)""").findAll(jsContent)
             .map { it.groupValues[1].toInt() }.toList()
 
@@ -163,7 +161,6 @@ internal class MangaGo(context: MangaLoaderContext) :
             decryptedString
         }
 
-        // 6. Split and Return
         return finalUrlString.split(",").mapIndexed { i, url ->
             MangaPage(
                 id = generateUid(url),
@@ -180,35 +177,25 @@ internal class MangaGo(context: MangaLoaderContext) :
         try {
             val keyBytes = hexStringToByteArray(hexKey)
             val ivBytes = hexStringToByteArray(hexIv)
-            val inputBytes = Base64.decode(b64, Base64.DEFAULT)
+            // FIX: Use java.util.Base64 instead of android.util.Base64
+            val inputBytes = Base64.getDecoder().decode(b64)
 
-            val cipher = Cipher.getInstance("AES/CBC/NoPadding") // JS uses ZeroPadding usually, handle via trim
+            val cipher = Cipher.getInstance("AES/CBC/NoPadding")
             val keySpec = SecretKeySpec(keyBytes, "AES")
             val ivSpec = IvParameterSpec(ivBytes)
 
             cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
             val decryptedBytes = cipher.doFinal(inputBytes)
 
-            // Remove padding (ZeroPadding in JS usually pads with null bytes)
             return String(decryptedBytes, Charsets.UTF_8).trim { it <= ' ' }
         } catch (e: Exception) {
             throw Exception("Failed to decrypt image list: ${e.message}")
         }
     }
 
-    /**
-     * Ports the Lua `UnscrambleImageList` and `StringUnscramble` logic.
-     * 1. Extracts "Keys" (digits) from the specific locations in the scrambled string.
-     * 2. Removes those Key characters from the string.
-     * 3. Uses the Keys to swap characters in the string back to original positions.
-     */
     private fun unscrambleImageList(scrambledStr: String, locations: List<Int>): String {
-        // Filter unique locations + 1 (Lua is 1-based, JS is 0-based. 
-        // The regex extracted JS indices (0-based). But Lua adds 1.
-        // We stick to 0-based for Kotlin logic matching the string index.)
         val uniqueLocs = locations.distinct().sorted()
 
-        // Extract the hidden keys (the digits at these locations)
         val keys = mutableListOf<Int>()
         for (loc in uniqueLocs) {
             if (loc < scrambledStr.length) {
@@ -219,7 +206,6 @@ internal class MangaGo(context: MangaLoaderContext) :
             }
         }
 
-        // Create the "Cleaned" string (Remove chars at uniqueLocs)
         val sb = StringBuilder()
         for (i in scrambledStr.indices) {
             if (i !in uniqueLocs) {
@@ -228,33 +214,22 @@ internal class MangaGo(context: MangaLoaderContext) :
         }
         val cleanedString = sb.toString()
 
-        // Perform the swap unscramble
         return stringUnscramble(cleanedString, keys)
     }
 
     private fun stringUnscramble(str: String, keys: List<Int>): String {
         val charArray = str.toCharArray()
         
-        // Loop backwards through keys
         for (j in keys.indices.reversed()) {
             val keyVal = keys[j]
-            // Loop backwards through string
             for (i in charArray.lastIndex downTo keyVal) {
-                if ((i - keyVal) % 2 != 0) { // Note: Verify this logic matches Lua (i-1)%2 != 0?
-                    // Lua is 1-based: if (i - 1) % 2 ~= 0
-                    // Kotlin (0-based) equivalent: if (i) % 2 != 0 ??
-                    // Let's trace carefully: 
-                    // Lua: i goes from Length to keyVal+1.
-                    // Lua Check: (i-1) is the 0-based index. So it checks if the 0-based index is odd.
-                    // Kotlin: i is the 0-based index. So we check if i is odd.
-                    if (i % 2 != 0) {
-                        val idx1 = i - keyVal
-                        val idx2 = i
-                        if (idx1 >= 0 && idx2 < charArray.size) {
-                            val temp = charArray[idx1]
-                            charArray[idx1] = charArray[idx2]
-                            charArray[idx2] = temp
-                        }
+                if (i % 2 != 0) { 
+                    val idx1 = i - keyVal
+                    val idx2 = i
+                    if (idx1 >= 0 && idx2 < charArray.size) {
+                        val temp = charArray[idx1]
+                        charArray[idx1] = charArray[idx2]
+                        charArray[idx2] = temp
                     }
                 }
             }
@@ -281,7 +256,6 @@ internal class MangaGo(context: MangaLoaderContext) :
     }
     
     private suspend fun fetchGenres(): Set<MangaTag> {
-        // Hardcoded list or fetch from homepage. Hardcoding for performance.
         val genres = listOf(
             "Action", "Adventure", "Comedy", "Doujinshi", "Drama", "Ecchi", "Fantasy", 
             "Gender Bender", "Harem", "Historical", "Horror", "Josei", "Martial Arts", 
