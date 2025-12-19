@@ -6,6 +6,7 @@ import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
+import org.koitharu.kotatsu.parsers.exception.ParseException // FIX: Added missing import
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
 import java.text.SimpleDateFormat
@@ -51,7 +52,7 @@ internal class RezoScans(context: MangaLoaderContext) :
         } else {
             val tag = when (order) {
                 SortOrder.POPULARITY -> "hot"
-                SortOrder.NEWEST -> "new" // "new" often maps to Created or Latest depending on Iken implementation
+                SortOrder.NEWEST -> "new"
                 else -> "new" // Default to "new" for UPDATED as well
             }
             urlBuilder.addQueryParameter("tag", tag)
@@ -72,7 +73,6 @@ internal class RezoScans(context: MangaLoaderContext) :
         val slug = json.getString("slug")
         val url = "/series/$slug"
         
-        // Iken usually provides 'cover' or 'thumbnail'
         val coverPath = json.optString("cover").takeIf { it.isNotEmpty() }
             ?: json.optString("thumbnail")
         val coverUrl = if (coverPath.startsWith("http")) coverPath else "https://api.rezoscan.org$coverPath"
@@ -99,8 +99,6 @@ internal class RezoScans(context: MangaLoaderContext) :
     override suspend fun getDetails(manga: Manga): Manga {
         val slug = manga.url.substringAfterLast("/")
         
-        // Fetch details from API
-        // Endpoint pattern for Iken: /api/posts/slug/{slug}
         val url = "$apiUrl/posts/slug/$slug"
         val json = webClient.httpGet(url.toHttpUrl()).parseJson()
         
@@ -108,7 +106,6 @@ internal class RezoScans(context: MangaLoaderContext) :
         
         val description = post.optString("description")
         
-        // Status parsing
         val statusStr = post.optString("status", "").lowercase()
         val state = when {
             statusStr.contains("ongoing") -> MangaState.ONGOING
@@ -118,12 +115,9 @@ internal class RezoScans(context: MangaLoaderContext) :
             else -> null
         }
 
-        // Chapters
-        // Iken often includes chapters in the details response under "chapters"
         val chaptersArray = post.optJSONArray("chapters") ?: org.json.JSONArray()
         val chapters = ArrayList<MangaChapter>(chaptersArray.length())
         
-        // Date parser for format "2023-10-27T14:30:00.000Z"
         val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
         dateFormat.timeZone = TimeZone.getTimeZone("UTC")
 
@@ -146,7 +140,7 @@ internal class RezoScans(context: MangaLoaderContext) :
                     title = title,
                     number = chNum,
                     volume = 0,
-                    url = "/series/$slug/$chSlug", // Web URL format
+                    url = "/series/$slug/$chSlug",
                     uploadDate = date,
                     source = source,
                     scanlator = null,
@@ -155,7 +149,6 @@ internal class RezoScans(context: MangaLoaderContext) :
             )
         }
         
-        // Iken usually returns Oldest -> Newest. Reverse for standard view.
         chapters.reverse()
 
         return manga.copy(
@@ -169,15 +162,7 @@ internal class RezoScans(context: MangaLoaderContext) :
     // 3. Pages
     // ---------------------------------------------------------------
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-        // Chapter URL: /series/SLUG/CHAPTER-SLUG
-        // API Endpoint: /api/posts/slug/SLUG/chapter/CHAPTER-SLUG
-        // Or sometimes just /api/chapters/CHAPTER-SLUG
-        
-        // We need to reconstruct the API call. 
-        // Based on Iken, the pages are often fetched via: /api/posts/slug/{mangaSlug}/chapter/{chapterSlug}
-        
         val parts = chapter.url.split("/").filter { it.isNotBlank() }
-        // parts = ["series", "manga-slug", "chapter-slug"]
         val mangaSlug = parts.getOrNull(1) ?: throw ParseException("Invalid chapter URL", chapter.url)
         val chapterSlug = parts.getOrNull(2) ?: throw ParseException("Invalid chapter URL", chapter.url)
 
