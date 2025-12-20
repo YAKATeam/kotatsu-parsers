@@ -1,6 +1,7 @@
 package org.koitharu.kotatsu.parsers.site.en
 
 import org.json.JSONObject
+import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -9,6 +10,8 @@ import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
 import java.text.SimpleDateFormat
 import java.util.*
+
+@Broken("Refactor")
 @MangaSourceParser("ATSUMARU", "Atsumaru", "en")
 internal class Atsumaru(context: MangaLoaderContext) :
     PagedMangaParser(context, MangaParserSource.ATSUMARU, 24) {
@@ -26,16 +29,7 @@ internal class Atsumaru(context: MangaLoaderContext) :
             isSearchWithFiltersSupported = true
         )
 
-    override suspend fun getFilterOptions(): MangaListFilterOptions {
-        // The source code implies generic types (Manga, Manwha, etc) are always fetched.
-        // We can expose them as tags if needed, but for now we keep it simple to match the original.
-        return MangaListFilterOptions(
-            availableTags = emptySet(),
-            availableStates = emptySet(),
-            availableContentRating = emptySet(),
-            availableLocales = emptySet()
-        )
-    }
+	override suspend fun getFilterOptions() = MangaListFilterOptions()
 
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
         // Case 1: Search (Uses a different API endpoint)
@@ -111,6 +105,8 @@ internal class Atsumaru(context: MangaLoaderContext) :
                 val number = ch.optDouble("number", 0.0).toFloat()
                 val title = ch.optString("title")
                 val dateStr = ch.optString("createdAt")
+				val uploadDate = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+					.parseSafe(dateStr)
 
                 // Format: slug/chapterId
                 val chapterUrl = "$slug/$chId"
@@ -122,7 +118,7 @@ internal class Atsumaru(context: MangaLoaderContext) :
                         number = number,
                         volume = 0,
                         url = chapterUrl,
-                        uploadDate = parseDate(dateStr),
+                        uploadDate = uploadDate,
                         source = source,
                         scanlator = null,
                         branch = null
@@ -222,7 +218,7 @@ internal class Atsumaru(context: MangaLoaderContext) :
 
         return Manga(
             id = generateUid(id), // Kotatsu internal UID
-            url = id,             // We store the raw slug/ID here for API usage
+            url = id, // We store the raw slug/ID here for API usage
             publicUrl = "https://$domain/manga/$id",
             coverUrl = coverUrl,
             title = title,
@@ -235,18 +231,5 @@ internal class Atsumaru(context: MangaLoaderContext) :
             description = synopsis,
             contentRating = ContentRating.SAFE
         )
-    }
-
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ENGLISH).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
-    }
-
-    private fun parseDate(dateStr: String): Long {
-        if (dateStr.isEmpty()) return 0L
-        return try {
-            dateFormat.parse(dateStr)?.time ?: 0L
-        } catch (e: Exception) {
-            0L
-        }
     }
 }
