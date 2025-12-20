@@ -1,6 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.en
 
-import org.json.JSONObject
+import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -12,15 +12,20 @@ import java.util.*
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import java.util.Base64 
 
+@Broken("Refactor")
 @MangaSourceParser("MANGAGO", "MangaGo", "en")
 internal class MangaGo(context: MangaLoaderContext) :
-    PagedMangaParser(context, MangaParserSource.MANGAGO, pageSize = 24) {
+    PagedMangaParser(context, MangaParserSource.MANGAGO, 24) {
 
     override val configKeyDomain = ConfigKey.Domain("mangago.me")
 
-    override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.UPDATED, SortOrder.POPULARITY, SortOrder.NEWEST, SortOrder.ALPHABETICAL)
+    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+		SortOrder.UPDATED,
+		SortOrder.POPULARITY,
+		SortOrder.NEWEST,
+		SortOrder.ALPHABETICAL,
+	)
 
     override val filterCapabilities: MangaListFilterCapabilities
         get() = MangaListFilterCapabilities(
@@ -32,7 +37,6 @@ internal class MangaGo(context: MangaLoaderContext) :
         return MangaListFilterOptions(
             availableTags = fetchGenres(),
             availableStates = EnumSet.allOf(MangaState::class.java),
-            availableContentRating = emptySet()
         )
     }
 
@@ -53,7 +57,6 @@ internal class MangaGo(context: MangaLoaderContext) :
         }
 
         val doc = webClient.httpGet(url).parseHtml()
-        
         val items = if (url.contains("l_search")) {
             doc.select("div.row")
         } else {
@@ -64,7 +67,8 @@ internal class MangaGo(context: MangaLoaderContext) :
             val titleEl = element.selectFirst("h2 a") ?: element.selectFirst("h3 a") ?: return@mapNotNull null
             val href = titleEl.attr("href")
             val title = titleEl.text()
-            val img = element.selectFirst("img")?.attr("src") ?: element.selectFirst("img")?.attr("data-original")
+            val img = element.selectFirst("img")?.attr("src")
+				?: element.selectFirst("img")?.attr("data-original")
 
             Manga(
                 id = generateUid(href),
@@ -98,8 +102,8 @@ internal class MangaGo(context: MangaLoaderContext) :
             else -> null
         }
 
-        val chapters = doc.select("table#chapter_table tr").mapNotNull { tr ->
-            val a = tr.selectFirst("a.chico") ?: return@mapNotNull null
+        val chapters = doc.select("table#chapter_table tr").mapIndexedNotNull { i, tr ->
+            val a = tr.selectFirst("a.chico") ?: return@mapIndexedNotNull null
             val href = a.attr("href")
             val title = a.text()
             val dateText = tr.select("td:last-child").text()
@@ -107,7 +111,7 @@ internal class MangaGo(context: MangaLoaderContext) :
             MangaChapter(
                 id = generateUid(href),
                 title = title,
-                number = -1f,
+                number = (i + 1).toFloat(),
                 volume = 0,
                 url = href,
                 uploadDate = parseDate(dateText),
@@ -137,14 +141,14 @@ internal class MangaGo(context: MangaLoaderContext) :
         // 2. Fetch the external JS to get the Keys
         val jsUrl = doc.select("script[src*='chapter.js']").attr("abs:src")
         if (jsUrl.isEmpty()) throw Exception("Chapter JS not found")
-        
+
         // FIX: Use body?.string() instead of parseJson() to get raw text
-        val jsContent = webClient.httpGet(jsUrl).body?.string() ?: throw Exception("Empty JS content")
+        val jsContent = webClient.httpGet(jsUrl).body.string()
 
         // 3. Extract AES Key and IV using Regex
         val keyHex = Regex("""CryptoJS\.enc\.Hex\.parse\("([0-9a-fA-F]+)"\)""").findAll(jsContent)
             .elementAtOrNull(0)?.groupValues?.get(1) ?: throw Exception("Encryption Key not found")
-        
+
         val ivHex = Regex("""CryptoJS\.enc\.Hex\.parse\("([0-9a-fA-F]+)"\)""").findAll(jsContent)
             .elementAtOrNull(1)?.groupValues?.get(1) ?: throw Exception("Encryption IV not found")
 
@@ -161,7 +165,7 @@ internal class MangaGo(context: MangaLoaderContext) :
             decryptedString
         }
 
-        return finalUrlString.split(",").mapIndexed { i, url ->
+        return finalUrlString.split(",").map { url ->
             MangaPage(
                 id = generateUid(url),
                 url = url,
@@ -219,17 +223,16 @@ internal class MangaGo(context: MangaLoaderContext) :
 
     private fun stringUnscramble(str: String, keys: List<Int>): String {
         val charArray = str.toCharArray()
-        
+
         for (j in keys.indices.reversed()) {
             val keyVal = keys[j]
             for (i in charArray.lastIndex downTo keyVal) {
-                if (i % 2 != 0) { 
+                if (i % 2 != 0) {
                     val idx1 = i - keyVal
-                    val idx2 = i
-                    if (idx1 >= 0 && idx2 < charArray.size) {
+                    if (idx1 >= 0 && i < charArray.size) {
                         val temp = charArray[idx1]
-                        charArray[idx1] = charArray[idx2]
-                        charArray[idx2] = temp
+                        charArray[idx1] = charArray[i]
+                        charArray[i] = temp
                     }
                 }
             }
@@ -249,19 +252,17 @@ internal class MangaGo(context: MangaLoaderContext) :
     }
 
     private fun parseDate(dateStr: String): Long {
-        return try {
-            val format = if (dateStr.contains(",")) "MMM d, yyyy" else "MMM d yyyy"
-            SimpleDateFormat(format, Locale.ENGLISH).parse(dateStr)?.time ?: 0L
-        } catch (e: Exception) { 0L }
+		val format = if (dateStr.contains(",")) "MMM d, yyyy" else "MMM d yyyy"
+        return SimpleDateFormat(format, Locale.ENGLISH).parseSafe(dateStr)
     }
-    
-    private suspend fun fetchGenres(): Set<MangaTag> {
+
+    private fun fetchGenres(): Set<MangaTag> {
         val genres = listOf(
-            "Action", "Adventure", "Comedy", "Doujinshi", "Drama", "Ecchi", "Fantasy", 
-            "Gender Bender", "Harem", "Historical", "Horror", "Josei", "Martial Arts", 
-            "Mature", "Mecha", "Mystery", "One Shot", "Psychological", "Romance", 
-            "School Life", "Sci-fi", "Seinen", "Shoujo", "Shoujo Ai", "Shounen", 
-            "Shounen Ai", "Slice of Life", "Smut", "Sports", "Supernatural", "Tragedy", 
+            "Action", "Adventure", "Comedy", "Doujinshi", "Drama", "Ecchi", "Fantasy",
+            "Gender Bender", "Harem", "Historical", "Horror", "Josei", "Martial Arts",
+            "Mature", "Mecha", "Mystery", "One Shot", "Psychological", "Romance",
+            "School Life", "Sci-fi", "Seinen", "Shoujo", "Shoujo Ai", "Shounen",
+            "Shounen Ai", "Slice of Life", "Smut", "Sports", "Supernatural", "Tragedy",
             "Webtoons", "Yaoi", "Yuri"
         )
         return genres.map { MangaTag(it, it, source) }.toSet()
