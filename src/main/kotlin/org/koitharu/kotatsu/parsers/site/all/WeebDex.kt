@@ -37,8 +37,7 @@ internal class WeebDex(context: MangaLoaderContext) :
             availableContentRating = EnumSet.of(
                 ContentRating.SAFE,
                 ContentRating.SUGGESTIVE,
-                ContentRating.EROTICA,
-                ContentRating.PORNOGRAPHIC
+                ContentRating.ADULT // Fixed: Combined Erotica/Pornographic into ADULT
             ),
             availableLocales = setOf(
                 Locale.ENGLISH,
@@ -73,7 +72,13 @@ internal class WeebDex(context: MangaLoaderContext) :
             // Filters
             if (filter.contentRating.isNotEmpty()) {
                 filter.contentRating.forEach { rating ->
-                    append("&contentRating=${rating.name.lowercase()}")
+                    when (rating) {
+                        ContentRating.SAFE -> append("&contentRating=safe")
+                        ContentRating.SUGGESTIVE -> append("&contentRating=suggestive")
+                        ContentRating.ADULT -> append("&contentRating=erotica&contentRating=pornographic")
+                        // Explicitly handle NSFW if the enum exists in older versions, mapping to adult
+                        else -> append("&contentRating=erotica&contentRating=pornographic")
+                    }
                 }
             } else {
                 append("&contentRating=safe&contentRating=suggestive")
@@ -99,8 +104,6 @@ internal class WeebDex(context: MangaLoaderContext) :
             
             // Apply Locale Filter if selected in search
             filter.originalLocale?.let { locale ->
-                // The API parameter 'originalLanguage' filters by source language (e.g. Manga vs Manhwa)
-                // If you meant publication language, WeebDex uses 'originalLanguage' for type.
                 append("&originalLanguage[]=${locale.language}")
             }
         }
@@ -120,8 +123,6 @@ internal class WeebDex(context: MangaLoaderContext) :
 
         val allChapters = ArrayList<MangaChapter>()
         var page = 1
-        
-        // Removed "&tlang=en" to fetch ALL languages
         val langParam = "" 
 
         while (true) {
@@ -138,7 +139,7 @@ internal class WeebDex(context: MangaLoaderContext) :
                 val vol = ch.optString("volume")
                 val chapNum = ch.optString("chapter")
                 val title = ch.optString("title")
-                val lang = ch.optString("language") // e.g. "en", "id"
+                val lang = ch.optString("language")
                 
                 // Groups
                 val groups = mutableListOf<String>()
@@ -159,7 +160,6 @@ internal class WeebDex(context: MangaLoaderContext) :
                 var fullTitle = "$volStr$chStr$titleStr".trim()
                 if (fullTitle.isEmpty()) fullTitle = "Oneshot"
                 
-                // Append language flag to title if not empty
                 if (lang.isNotEmpty()) fullTitle += " [$lang]"
 
                 val numFloat = chapNum.toFloatOrNull() ?: -1f
