@@ -84,6 +84,9 @@ bin/
 
 src/test/resources/cookies.txt
 local.properties
+/local.properties
+gradle.properties
+/gradle.properties
 .kotlin/
 !/.idea/kotlin-statistics.xml
 
