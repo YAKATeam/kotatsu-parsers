@@ -687,23 +687,3 @@ public object SSLUtils {
 
     public val trustManager: X509TrustManager = trustAllCerts[0] as X509TrustManager
 }
-
-public fun main() {
-	fun encodeKeyword(input: String): String {
-		val sb = StringBuilder()
-		// Separate each word, even whitespace
-		for (c in input) {
-			when {
-				c == ' ' -> sb.append('+')
-				c.isLetterOrDigit() || c.code > 0x7F -> sb.append(c)
-				else -> sb.append(String.format("%%%02X", c.code))
-			}
-		}
-		// Tested with "mẹ mày béo @@+" keyword
-		return sb.toString()
-	}
-
-	println("Keyword: mẹ mày béo @@+")
-	println("Keyword encoded: " + encodeKeyword("mẹ mày béo @@+"))
-	println("Token: " + VrfGenerator.generate("mẹ mày béo @@+"))
-}
