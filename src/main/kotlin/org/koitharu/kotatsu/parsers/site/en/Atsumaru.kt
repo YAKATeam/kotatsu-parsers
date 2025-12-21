@@ -11,7 +11,6 @@ import org.koitharu.kotatsu.parsers.util.*
 import java.text.SimpleDateFormat
 import java.util.*
 
-@Broken("Refactor")
 @MangaSourceParser("ATSUMARU", "Atsumaru", "en")
 internal class Atsumaru(context: MangaLoaderContext) :
     PagedMangaParser(context, MangaParserSource.ATSUMARU, 24) {

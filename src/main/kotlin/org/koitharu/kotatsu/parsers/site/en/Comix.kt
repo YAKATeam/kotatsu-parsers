@@ -17,7 +17,6 @@ import java.util.*
 import java.math.BigDecimal
 import java.math.RoundingMode
 
-@Broken("Need some tests")
 @MangaSourceParser("COMIX", "Comix", "en", ContentType.MANGA)
 internal class Comix(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.COMIX, 28) {
@@ -148,7 +147,13 @@ internal class Comix(context: MangaLoaderContext) :
 		val hash = manga.url.substringAfter("/title/").substringBefore("-").nullIfEmpty()
 			?: throw ParseException("Invalid manga URL", manga.url)
 
-		val detailsUrl = "$apiBaseUrl/manga/$hash".toHttpUrl().newBuilder().build()
+		val detailsUrl = "$apiBaseUrl/manga/$hash".toHttpUrl().newBuilder()
+			.addQueryParameter("includes[]", "author")
+			.addQueryParameter("includes[]", "artist")
+			.addQueryParameter("includes[]", "genre")
+			.addQueryParameter("includes[]", "theme")
+			.addQueryParameter("includes[]", "demographic")
+			.build()
 		val detailsDeferred = async { webClient.httpGet(detailsUrl).parseJson() }
 		val chaptersDeferred = async { getChapters(hash) }
 
@@ -167,9 +172,17 @@ internal class Comix(context: MangaLoaderContext) :
 		if (result != null) {
 			val updated = parseMangaFromJson(result)
 
-			val authors = result.optJSONArray("author")?.let { arr ->
-				(0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("title")?.nullIfEmpty() }.toSet()
-			} ?: emptySet()
+			val authors = LinkedHashSet<String>()
+			result.optJSONArray("author")?.let { arr ->
+				for (i in 0 until arr.length()) {
+					arr.optJSONObject(i)?.optString("title")?.nullIfEmpty()?.let { authors.add(it) }
+				}
+			}
+			result.optJSONArray("artist")?.let { arr ->
+				for (i in 0 until arr.length()) {
+					arr.optJSONObject(i)?.optString("title")?.nullIfEmpty()?.let { authors.add(it) }
+				}
+			}
 
 			val tags = mutableSetOf<MangaTag>()
 			fun addTags(field: String) {
@@ -307,34 +320,14 @@ internal class Comix(context: MangaLoaderContext) :
 	// Pages
 	// -------------------------
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val chapterUrl = "https://$domain${chapter.url}"
+		val chapterId = chapter.url.substringAfterLast("/").substringBefore("-")
+		val response = webClient.httpGet("$apiBaseUrl/chapters/$chapterId").parseJson()
 
-		val response = try {
-			webClient.httpGet(chapterUrl)
-		} catch (_: Exception) {
-			throw ParseException("Failed to load chapter page", chapterUrl)
-		}
+		val images = response.optJSONObject("result")?.optJSONArray("images") ?: return emptyList()
+		val pages = ArrayList<MangaPage>(images.length())
 
-		val body = response.body.string()
-		val regex = Regex("""["\\]*images["\\]*\s*:\s*(\[[^]]*(?:](?!\s*[,\]}])|[^]]*)])""", RegexOption.DOT_MATCHES_ALL)
-
-		val match = regex.find(body)
-		if (match == null || match.groupValues.size < 2) {
-			throw ParseException("Images regex NOT matched", chapterUrl)
-		}
-
-		val jsonStringRaw = match.groupValues[1]
-		val jsonStringClean = jsonStringRaw.replace("\\\"", "\"")
-
-		val imagesJson = try {
-			JSONArray(jsonStringClean)
-		} catch (_: Exception) {
-			throw ParseException("Failed to parse images JSON", chapterUrl)
-		}
-
-		val pages = ArrayList<MangaPage>(imagesJson.length())
-		for (i in 0 until imagesJson.length()) {
-			val imgObj = imagesJson.optJSONObject(i) ?: continue
+		for (i in 0 until images.length()) {
+			val imgObj = images.optJSONObject(i) ?: continue
 			val url = imgObj.optString("url", "").nullIfEmpty() ?: continue
 
 			pages.add(MangaPage(
