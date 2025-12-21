@@ -3,6 +3,7 @@ package org.koitharu.kotatsu.parsers.site.all
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
+import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -11,36 +12,28 @@ import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
 import java.util.*
 
+@Broken("Need some tests")
 @MangaSourceParser("MANGAPARK", "MangaPark", "en")
 internal class MangaPark(context: MangaLoaderContext) :
-	PagedMangaParser(context, MangaParserSource.MANGAPARK, pageSize = 24) {
+	PagedMangaParser(context, MangaParserSource.MANGAPARK, 24) {
 
 	override val configKeyDomain = ConfigKey.Domain("mangapark.io")
 
-	private val apiUrl = "https://mangapark.io/apo/"
+	private val apiUrl = "https://$domain/apo/"
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.UPDATED)
 
 	override val filterCapabilities: MangaListFilterCapabilities
 		get() = MangaListFilterCapabilities(
 			isSearchSupported = true,
-			isSearchWithFiltersSupported = false
 		)
 
-	// FIX 1: Implemented required abstract method
-	override suspend fun getFilterOptions(): MangaListFilterOptions {
-		return MangaListFilterOptions(
-			availableTags = emptySet(),
-			availableStates = emptySet(),
-			availableContentRating = emptySet(),
-			availableLocales = emptySet()
-		)
-	}
+	override suspend fun getFilterOptions() = MangaListFilterOptions()
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		val query = """
-            query(${"$"}select: SearchComic_Select) {
-              get_searchComic(select: ${"$"}select) {
+		val query = $$"""
+            query($select: SearchComic_Select) {
+              get_searchComic(select: $select) {
                 items {
                   data {
                     id
@@ -112,16 +105,16 @@ internal class MangaPark(context: MangaLoaderContext) :
 				else -> null
 			}
 			Triple(author, description, state)
-		} catch (e: Exception) {
+		} catch (_: Exception) {
 			Triple(null, null, null)
 		}
 
 		val comicId = manga.url.split("/").find { it.all { char -> char.isDigit() } }
 			?: throw Exception("Could not find Comic ID in URL")
 
-		val query = """
-            query(${"$"}id: ID!) {
-              get_comicChapterList(comicId: ${"$"}id) {
+		val query = $$"""
+            query($id: ID!) {
+              get_comicChapterList(comicId: $id) {
                 data {
                   id
                   dname
@@ -186,9 +179,9 @@ internal class MangaPark(context: MangaLoaderContext) :
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val chapterId = chapter.id
 
-		val query = """
-            query(${"$"}id: ID!) {
-              get_chapterNode(id: ${"$"}id) {
+		val query = $$"""
+            query($id: ID!) {
+              get_chapterNode(id: $id) {
                 data {
                   imageFile {
                     urlList
