@@ -182,79 +182,82 @@ internal abstract class MangaFireParser(
         ),
     )
 
-    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-        val url = "https://$domain/filter".toHttpUrl().newBuilder().apply {
-            addQueryParameter("page", page.toString())
-            addQueryParameter("language[]", siteLang)
+	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+		val url = buildString {
+			append("/filter")
 
-            when {
-                // FIX: Use raw query string. Do not manually encode before passing to VrfGenerator.
-                !filter.query.isNullOrEmpty() -> {
-                    val query = filter.query
+			// Paging
+			append("?page=")
+			append(page)
 
-                    // 1. Calculate VRF using the raw query (generator handles internal encoding)
-                    val searchVrf = VrfGenerator.generate(query)
-                    addQueryParameter("vrf", searchVrf)
+			// Language
+			append("&language[]=")
+			append(siteLang)
 
-                    // 2. Add keyword using standard addQueryParameter (OkHttp handles URL encoding)
-                    addQueryParameter("keyword", query)
+			when {
+				!filter.query.isNullOrEmpty() -> {
+					// Keyword + vrf
+					append("&keyword=")
+					append(encodeKeyword(filter.query))
+					append("&vrf=")
+					append(VrfGenerator.generate(filter.query))
 
-                    addQueryParameter(
-                        name = "sort",
-                        value = when (order) {
-                            SortOrder.UPDATED -> "recently_updated"
-                            SortOrder.POPULARITY -> "most_viewed"
-                            SortOrder.RATING -> "scores"
-                            SortOrder.NEWEST -> "release_date"
-                            SortOrder.ALPHABETICAL -> "title_az"
-                            SortOrder.RELEVANCE -> "most_relevance"
-                            else -> ""
-                        },
-                    )
-                }
+					append("&sort=")
+					append(when (order) {
+						SortOrder.UPDATED -> "recently_updated"
+						SortOrder.POPULARITY -> "most_viewed"
+						SortOrder.RATING -> "scores"
+						SortOrder.NEWEST -> "release_date"
+						SortOrder.ALPHABETICAL -> "title_az"
+						SortOrder.RELEVANCE -> "most_relevance"
+						else -> ""
+					})
+				}
 
-                else -> {
-                    filter.tagsExclude.forEach { tag ->
-                        addQueryParameter("genre[]", "-${tag.key}")
-                    }
-                    filter.tags.forEach { tag ->
-                        addQueryParameter("genre[]", tag.key)
-                    }
-                    filter.locale?.let {
-                        addQueryParameter("language[]", it.language)
-                    }
-                    filter.states.forEach { state ->
-                        addQueryParameter(
-                            name = "status[]",
-                            value = when (state) {
-                                MangaState.ONGOING -> "releasing"
-                                MangaState.FINISHED -> "completed"
-                                MangaState.ABANDONED -> "discontinued"
-                                MangaState.PAUSED -> "on_hiatus"
-                                MangaState.UPCOMING -> "info"
-                                else -> throw IllegalArgumentException("$state not supported")
-                            },
-                        )
-                    }
-                    addQueryParameter(
-                        name = "sort",
-                        value = when (order) {
-                            SortOrder.UPDATED -> "recently_updated"
-                            SortOrder.POPULARITY -> "most_viewed"
-                            SortOrder.RATING -> "scores"
-                            SortOrder.NEWEST -> "release_date"
-                            SortOrder.ALPHABETICAL -> "title_az"
-                            SortOrder.RELEVANCE -> "most_relevance"
-                            else -> ""
-                        },
-                    )
-                }
-            }
-        }.build()
+				else -> {
+					filter.tagsExclude.forEach { tag ->
+						append("&genre[]=-")
+						append(tag.key)
+					}
 
-        return client.httpGet(url)
-            .parseHtml().parseMangaList()
-    }
+					filter.tags.forEach { tag ->
+						append("&genre[]=")
+						append(tag.key)
+					}
+
+					filter.locale?.let {
+						append("&language[]=")
+						append(it.language)
+					}
+
+					filter.states.forEach { state ->
+						append("&status[]=")
+						append(when (state) {
+							MangaState.ONGOING -> "releasing"
+							MangaState.FINISHED -> "completed"
+							MangaState.ABANDONED -> "discontinued"
+							MangaState.PAUSED -> "on_hiatus"
+							MangaState.UPCOMING -> "info"
+							else -> throw IllegalArgumentException("$state not supported")
+						})
+					}
+
+					append("&sort=")
+					append(when (order) {
+						SortOrder.UPDATED -> "recently_updated"
+						SortOrder.POPULARITY -> "most_viewed"
+						SortOrder.RATING -> "scores"
+						SortOrder.NEWEST -> "release_date"
+						SortOrder.ALPHABETICAL -> "title_az"
+						SortOrder.RELEVANCE -> "most_relevance"
+						else -> ""
+					})
+				}
+			}
+		}
+
+		return client.httpGet(url.toAbsoluteUrl(domain)).parseHtml().parseMangaList()
+	}
 
     private fun Document.parseMangaList(): List<Manga> {
         return select(".original.card-lg .unit .inner").map {
@@ -521,6 +524,20 @@ internal abstract class MangaFireParser(
     }
 
     private fun Int.ceilDiv(other: Int) = (this + (other - 1)) / other
+
+	private	fun encodeKeyword(input: String): String {
+		val sb = StringBuilder()
+		// Separate each word, even whitespace
+		for (c in input) {
+			when {
+				c == ' ' -> sb.append('+')
+				c.isLetterOrDigit() || c.code > 0x7F -> sb.append(c)
+				else -> sb.append(String.format("%%%02X", c.code))
+			}
+		}
+		// Tested with "mẹ mày béo @@+" keyword
+		return sb.toString()
+	}
 
     @MangaSourceParser("MANGAFIRE_EN", "MangaFire English", "en")
     class English(context: MangaLoaderContext) : MangaFireParser(context, MangaParserSource.MANGAFIRE_EN, "en")

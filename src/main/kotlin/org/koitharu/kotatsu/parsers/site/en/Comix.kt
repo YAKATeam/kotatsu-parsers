@@ -37,7 +37,7 @@ internal class Comix(context: MangaLoaderContext) :
 			isSearchSupported = true,
 			isSearchWithFiltersSupported = true,
 			isMultipleTagsSupported = true,
-			isTagsExclusionSupported = true
+			isTagsExclusionSupported = true,
 		)
 
 	override val availableSortOrders: Set<SortOrder> = linkedSetOf(
