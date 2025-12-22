@@ -128,7 +128,6 @@ internal abstract class MangaFireParser(
     override val configKeyDomain: ConfigKey.Domain = ConfigKey.Domain("mangafire.to")
 
     override val availableSortOrders: Set<SortOrder> = EnumSet.of(
-        SortOrder.UPDATED,
         SortOrder.POPULARITY,
         SortOrder.RATING,
         SortOrder.NEWEST,
@@ -212,7 +211,7 @@ internal abstract class MangaFireParser(
 						SortOrder.RATING -> "scores"
 						SortOrder.NEWEST -> "release_date"
 						SortOrder.ALPHABETICAL -> "title_az"
-						// Default to relevance for search if UPDATED (default) or RELEVANCE is selected
+						// Default to relevance for search if RELEVANCE is selected
 						else -> "most_relevance"
 					})
 				}
@@ -247,7 +246,6 @@ internal abstract class MangaFireParser(
 
 					append("&sort=")
 					append(when (order) {
-						SortOrder.UPDATED -> "recently_updated"
 						SortOrder.POPULARITY -> "most_viewed"
 						SortOrder.RATING -> "scores"
 						SortOrder.NEWEST -> "release_date"
@@ -259,13 +257,7 @@ internal abstract class MangaFireParser(
 			}
 		}
 
-		val list = client.httpGet(url.toAbsoluteUrl(domain)).parseHtml().parseMangaList()
-
-		if (!filter.query.isNullOrEmpty() && page == 1) {
-			return list.sortedByDescending { it.title.equals(filter.query, ignoreCase = true) }
-		}
-
-		return list
+		return client.httpGet(url.toAbsoluteUrl(domain)).parseHtml().parseMangaList()
 	}
 
     private fun Document.parseMangaList(): List<Manga> {
