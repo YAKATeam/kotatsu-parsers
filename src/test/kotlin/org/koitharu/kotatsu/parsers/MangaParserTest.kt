@@ -225,12 +225,13 @@ internal class MangaParserTest {
 		val parser = context.newParserInstance(source)
 		val defaultDomain = parser.domain
 		val url = HttpUrl.Builder().host(defaultDomain).scheme("https").toString()
-		val response = context.doRequest(url, source)
-		val realUrl = response.request.url
-		val realDomain = realUrl.topPrivateDomain()
-		val realHost = realUrl.host
-		assert(defaultDomain == realHost || defaultDomain == realDomain) {
-			"Domain mismatch:\nRequired:\t\t\t$defaultDomain\nActual:\t\t\t$realDomain\nHost:\t\t\t$realHost"
+		context.doRequest(url, source).use { response ->
+			val realUrl = response.request.url
+			val realDomain = realUrl.topPrivateDomain()
+			val realHost = realUrl.host
+			assert(defaultDomain == realHost || defaultDomain == realDomain) {
+				"Domain mismatch:\nRequired:\t\t\t$defaultDomain\nActual:\t\t\t$realDomain\nHost:\t\t\t$realHost"
+			}
 		}
 	}
 

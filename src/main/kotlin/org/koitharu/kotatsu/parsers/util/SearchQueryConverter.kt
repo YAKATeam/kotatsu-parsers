@@ -114,7 +114,7 @@ internal fun MangaListFilterCapabilities.toMangaSearchQueryCapabilities(): Manga
 					isMultiple = true,
 				)
 			},
-			isSearchSupported.takeIf { it }?.let {
+			isSearchSupported.takeIf { it && !isSearchWithFiltersSupported }?.let {
 				SearchCapability(
 					field = TITLE_NAME,
 					criteriaTypes = setOf(Match::class),

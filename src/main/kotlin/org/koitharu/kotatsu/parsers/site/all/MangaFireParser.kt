@@ -1,5 +1,8 @@
 package org.koitharu.kotatsu.parsers.site.all
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import org.jsoup.Jsoup
@@ -169,6 +172,7 @@ internal abstract class MangaFireParser(
             isMultipleTagsSupported = true,
             isTagsExclusionSupported = true,
             isSearchSupported = true,
+            isOriginalLocaleSupported = true
         )
 
     override suspend fun getFilterOptions() = MangaListFilterOptions(
@@ -204,13 +208,12 @@ internal abstract class MangaFireParser(
 
 					append("&sort=")
 					append(when (order) {
-						SortOrder.UPDATED -> "recently_updated"
 						SortOrder.POPULARITY -> "most_viewed"
 						SortOrder.RATING -> "scores"
 						SortOrder.NEWEST -> "release_date"
 						SortOrder.ALPHABETICAL -> "title_az"
-						SortOrder.RELEVANCE -> "most_relevance"
-						else -> ""
+						// Default to relevance for search if UPDATED (default) or RELEVANCE is selected
+						else -> "most_relevance"
 					})
 				}
 
@@ -256,7 +259,13 @@ internal abstract class MangaFireParser(
 			}
 		}
 
-		return client.httpGet(url.toAbsoluteUrl(domain)).parseHtml().parseMangaList()
+		val list = client.httpGet(url.toAbsoluteUrl(domain)).parseHtml().parseMangaList()
+
+		if (!filter.query.isNullOrEmpty() && page == 1) {
+			return list.sortedByDescending { it.title.equals(filter.query, ignoreCase = true) }
+		}
+
+		return list
 	}
 
     private fun Document.parseMangaList(): List<Manga> {
@@ -358,34 +367,46 @@ internal abstract class MangaFireParser(
         }
     }
 
-    private suspend fun getChaptersBranch(mangaId: String, branch: ChapterBranch): List<MangaChapter> {
+    private suspend fun getChaptersBranch(mangaId: String, branch: ChapterBranch): List<MangaChapter> = coroutineScope {
         val readVrfInput = "$mangaId@${branch.type}@${branch.langCode}"
         val readVrf = VrfGenerator.generate(readVrfInput)
 
-        val response = client
-            .httpGet("https://$domain/ajax/read/$mangaId/${branch.type}/${branch.langCode}?vrf=$readVrf")
-
-        val chapterElements = response.parseJson()
-            .getJSONObject("result")
-            .getString("html")
-            .let(Jsoup::parseBodyFragment)
-            .select("ul li a")
-
-        if (branch.type == "chapter") {
-            val doc = client
-                .httpGet("https://$domain/ajax/manga/$mangaId/${branch.type}/${branch.langCode}")
-                .parseJson()
-                .getString("result")
-                .let(Jsoup::parseBodyFragment)
-
-            doc.select("ul li a").withIndex().forEach { (i, it) ->
-                val date = it.select("span").getOrNull(1)?.ownText() ?: ""
-                chapterElements[i].attr("upload-date", date)
-                chapterElements[i].attr("other-title", it.attr("title"))
+        val listDeferred = async {
+            client.httpGet("https://$domain/ajax/read/$mangaId/${branch.type}/${branch.langCode}?vrf=$readVrf").use {
+                it.parseJson()
+                    .getJSONObject("result")
+                    .getString("html")
+                    .let(Jsoup::parseBodyFragment)
+                    .select("ul li a")
             }
         }
 
-        return chapterElements.mapChapters(reversed = true) { _, it ->
+        val metaDocDeferred = if (branch.type == "chapter") {
+            async {
+                client.httpGet("https://$domain/ajax/manga/$mangaId/${branch.type}/${branch.langCode}").use {
+                    it.parseJson()
+                        .getString("result")
+                        .let(Jsoup::parseBodyFragment)
+                }
+            }
+        } else {
+            null
+        }
+
+        val chapterElements = listDeferred.await()
+        val metaDoc = metaDocDeferred?.await()
+
+        if (metaDoc != null) {
+            metaDoc.select("ul li a").withIndex().forEach { (i, it) ->
+                if (i < chapterElements.size) {
+                    val date = it.select("span").getOrNull(1)?.ownText() ?: ""
+                    chapterElements[i].attr("upload-date", date)
+                    chapterElements[i].attr("other-title", it.attr("title"))
+                }
+            }
+        }
+
+        chapterElements.mapChapters(reversed = true) { _, it ->
             val chapterId = it.attr("data-id")
             MangaChapter(
                 id = generateUid(it.attr("href")),

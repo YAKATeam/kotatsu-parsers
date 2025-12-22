@@ -101,5 +101,14 @@ public abstract class AbstractMangaParser @InternalParsersApi constructor(
 	 */
 	override suspend fun resolveLink(resolver: LinkResolver, link: HttpUrl): Manga? = null
 
-	override fun intercept(chain: Interceptor.Chain): Response = chain.proceed(chain.request())
+	override fun intercept(chain: Interceptor.Chain): Response {
+		val request = chain.request()
+		val builder = request.newBuilder()
+		getRequestHeaders().forEach { (name, value) ->
+			if (request.header(name) == null) {
+				builder.header(name, value)
+			}
+		}
+		return chain.proceed(builder.build())
+	}
 }

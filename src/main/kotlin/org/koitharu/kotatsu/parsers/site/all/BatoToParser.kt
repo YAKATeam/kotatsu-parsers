@@ -33,11 +33,11 @@ internal class BatoToParser(context: MangaLoaderContext) : PagedMangaParser(
 ), MangaParserAuthProvider, Interceptor {
 
 	override val configKeyDomain = ConfigKey.Domain(
+		"batotoo.com",
 		"bato.to",
 		"batocomic.com",
 		"batocomic.net",
 		"batocomic.org",
-		"batotoo.com",
 		"batotwo.com",
 		"battwo.com",
 		"comiko.net",
@@ -321,7 +321,7 @@ internal class BatoToParser(context: MangaLoaderContext) : PagedMangaParser(
 			val args = JSONArray(decryptAES(batoWord, password))
 			val result = ArrayList<MangaPage>(images.length())
 			repeat(images.length()) { i ->
-				val url = images.getString(i)
+				val url = images.getString(i).replace("https://k", "https://n")
 				result += MangaPage(
 					id = generateUid(url),
 					url = if (args.length() == 0) url else url + "?" + args.getString(i),
@@ -510,8 +510,8 @@ internal class BatoToParser(context: MangaLoaderContext) : PagedMangaParser(
 		private val SERVER_PATTERN = Regex("https://[a-zA-Z]\\d{2}")
 		// Sorted list: Most reliable servers FIRST
 		private val FALLBACK_SERVERS = listOf(
-			"k03", "k06", "k07", "k00", "k01", "k02", "k04", "k05", "k08", "k09",
-			"n03", "n00", "n01", "n02", "n04", "n05", "n06", "n07", "n08", "n09", "n10"
+			"n03", "n00", "n01", "n02", "n04", "n05", "n06", "n07", "n08", "n09", "n10",
+			"k03", "k06", "k07", "k00", "k01", "k02", "k04", "k05", "k08", "k09"
 		)
 	}
 }

@@ -1,6 +1,7 @@
 package org.koitharu.kotatsu.parsers.site.en
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONArray
@@ -50,7 +51,7 @@ internal class Comix(context: MangaLoaderContext) :
 	)
 
 	override suspend fun getFilterOptions() = MangaListFilterOptions(
-		availableTags = fetchAvailableTags()
+		availableTags = availableTags
 	)
 
 	// -------------------------
@@ -243,40 +244,56 @@ internal class Comix(context: MangaLoaderContext) :
 	// -------------------------
 	// Chapters
 	// -------------------------
-	private suspend fun getChapters(hashId: String): List<MangaChapter> {
-		val allItems = ArrayList<JSONObject>()
-		var page = 1
-		var lastPage = Int.MAX_VALUE
+	private suspend fun getChapters(hashId: String): List<MangaChapter> = coroutineScope {
+		val firstPageUrl = "$apiBaseUrl/manga/$hashId/chapters".toHttpUrl().newBuilder().apply {
+			addQueryParameter("order[number]", "desc")
+			addQueryParameter("limit", "100")
+			addQueryParameter("page", "1")
+		}.build()
 
-		while (page <= lastPage && page <= 200) {
-			val url = "$apiBaseUrl/manga/$hashId/chapters".toHttpUrl().newBuilder().apply {
-				addQueryParameter("order[number]", "desc")
-				addQueryParameter("limit", "100")
-				addQueryParameter("page", page.toString())
-			}.build()
-
-			val resp = try {
-				webClient.httpGet(url).parseJson()
-			} catch (_: Exception) {
-				break
-			}
-
-			val items = resp.optJSONObject("result")?.optJSONArray("items") ?: JSONArray()
-			for (i in 0 until items.length()) {
-				val item = items.optJSONObject(i) ?: continue
-				allItems.add(item)
-			}
-
-			val pagination = resp.optJSONObject("result")?.optJSONObject("pagination")
-			if (pagination != null) {
-				lastPage = pagination.optInt("last_page", page)
-			} else {
-				if (items.length() < 100) lastPage = page
-			}
-			page++
+		val firstResp = try {
+			webClient.httpGet(firstPageUrl).parseJson()
+		} catch (_: Exception) {
+			return@coroutineScope emptyList()
 		}
 
-		return allItems.mapNotNull { item ->
+		val allItems = ArrayList<JSONObject>()
+		val firstItems = firstResp.optJSONObject("result")?.optJSONArray("items") ?: JSONArray()
+		for (i in 0 until firstItems.length()) {
+			val item = firstItems.optJSONObject(i) ?: continue
+			allItems.add(item)
+		}
+
+		val pagination = firstResp.optJSONObject("result")?.optJSONObject("pagination")
+		val lastPage = pagination?.optInt("last_page", 1) ?: 1
+
+		if (lastPage > 1) {
+			val maxPage = minOf(lastPage, 200)
+			val deferreds = (2..maxPage).map { page ->
+				async {
+					val url = "$apiBaseUrl/manga/$hashId/chapters".toHttpUrl().newBuilder().apply {
+						addQueryParameter("order[number]", "desc")
+						addQueryParameter("limit", "100")
+						addQueryParameter("page", page.toString())
+					}.build()
+
+					try {
+						webClient.httpGet(url).parseJson()
+					} catch (_: Exception) {
+						null
+					}
+				}
+			}
+			deferreds.awaitAll().forEach { resp ->
+				val items = resp?.optJSONObject("result")?.optJSONArray("items") ?: return@forEach
+				for (i in 0 until items.length()) {
+					val item = items.optJSONObject(i) ?: continue
+					allItems.add(item)
+				}
+			}
+		}
+
+		allItems.mapNotNull { item ->
 			val num = item.optDouble("number", Double.NaN)
 			if (num.isNaN()) return@mapNotNull null
 
@@ -312,7 +329,7 @@ internal class Comix(context: MangaLoaderContext) :
 				uploadDate = createdAt * 1000L,
 				source = source,
 				scanlator = scanlatorName,
-				branch = null
+				branch = scanlatorName
 			)
 		}
 	}
@@ -344,7 +361,8 @@ internal class Comix(context: MangaLoaderContext) :
 
 	override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
 
-	private fun fetchAvailableTags(): Set<MangaTag> = setOf(
+	private val availableTags by lazy {
+		setOf(
 		MangaTag("6", "Action", source),
 		MangaTag("87264", "Adult", source),
 		MangaTag("7", "Adventure", source),
@@ -412,5 +430,6 @@ internal class Comix(context: MangaLoaderContext) :
 		MangaTag("65", "Villainess", source),
 		MangaTag("66", "Virtual Reality", source),
 		MangaTag("67", "Zombies", source)
-	)
+		)
+	}
 }

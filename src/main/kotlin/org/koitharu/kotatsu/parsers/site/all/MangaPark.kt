@@ -2,17 +2,18 @@ package org.koitharu.kotatsu.parsers.site.all
 
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import org.json.JSONArray
 import org.json.JSONObject
 import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
+import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
 import java.util.*
 
-@Broken("Need some tests")
 @MangaSourceParser("MANGAPARK", "MangaPark", "en")
 internal class MangaPark(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.MANGAPARK, 24) {
@@ -26,9 +27,20 @@ internal class MangaPark(context: MangaLoaderContext) :
 	override val filterCapabilities: MangaListFilterCapabilities
 		get() = MangaListFilterCapabilities(
 			isSearchSupported = true,
+			isSearchWithFiltersSupported = true,
+			isMultipleTagsSupported = true
 		)
 
-	override suspend fun getFilterOptions() = MangaListFilterOptions()
+	override suspend fun getFilterOptions(): MangaListFilterOptions {
+		val tags = listOf(
+			"action", "adventure", "comedy", "drama", "fantasy", "horror", "mystery",
+			"psychological", "romance", "sci_fi", "slice_of_life", "sports", "supernatural",
+			"thriller", "tragedy"
+		).map {
+			MangaTag(it.replace("_", " ").toCamelCase(), it, source)
+		}.toSet()
+		return MangaListFilterOptions(availableTags = tags)
+	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		val query = $$"""
@@ -52,6 +64,9 @@ internal class MangaPark(context: MangaLoaderContext) :
 				put("page", page)
 				put("size", 24)
 				put("word", filter.query ?: "")
+				if (filter.tags.isNotEmpty()) {
+					put("incGenres", JSONArray(filter.tags.map { it.key }))
+				}
 			})
 		}
 
@@ -90,30 +105,24 @@ internal class MangaPark(context: MangaLoaderContext) :
 	}
 
 	override suspend fun getDetails(manga: Manga): Manga {
-		val details = try {
-			val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
-			val author = doc.select("div:has(span:containsOwn(Authors)) a, div:has(span:containsOwn(Author)) a").textOrNull()
-			val description = doc.select("div:has(h3:containsOwn(Summary)) + div").textOrNull()
-				?: doc.select("div:has(h3:containsOwn(Description)) + div").textOrNull()
-
-			val statusText = doc.select("div:has(span:containsOwn(Status))").textOrNull()?.lowercase()
-			val state = when {
-				statusText?.contains("ongoing") == true -> MangaState.ONGOING
-				statusText?.contains("completed") == true -> MangaState.FINISHED
-				statusText?.contains("hiatus") == true -> MangaState.PAUSED
-				statusText?.contains("cancelled") == true -> MangaState.ABANDONED
-				else -> null
-			}
-			Triple(author, description, state)
-		} catch (_: Exception) {
-			Triple(null, null, null)
-		}
-
-		val comicId = manga.url.split("/").find { it.all { char -> char.isDigit() } }
-			?: throw Exception("Could not find Comic ID in URL")
+		val comicId = Regex("\\d+").find(manga.url)?.value
+			?: throw ParseException("Could not find Comic ID in URL", manga.url)
 
 		val query = $$"""
             query($id: ID!) {
+              get_comicNode(id: $id) {
+                data {
+                  name
+                  altNames
+                  urlCoverOri
+                  authors
+                  artists
+                  genres
+                  originalStatus
+                  uploadStatus
+                  summary
+                }
+              }
               get_comicChapterList(comicId: $id) {
                 data {
                   id
@@ -134,32 +143,62 @@ internal class MangaPark(context: MangaLoaderContext) :
         """
 
 		val json = graphqlRequest(query, JSONObject().put("id", comicId))
-		val chapterList = json.optJSONObject("data")
-			?.optJSONObject("get_comicChapterList")
-			?.optJSONArray("data")
-			?: json.optJSONObject("data")?.optJSONArray("get_comicChapterList")
+		val data = json.optJSONObject("data")
+			?: throw ParseException("No data returned from GraphQL", manga.url)
+
+		val comicNode = data.optJSONObject("get_comicNode")?.optJSONObject("data")
+		val chapterList = data.optJSONArray("get_comicChapterList")
+
+		val authors = mutableSetOf<String>()
+		comicNode?.optJSONArray("authors")?.let { arr ->
+			for (i in 0 until arr.length()) authors.add(arr.getString(i))
+		}
+		comicNode?.optJSONArray("artists")?.let { arr ->
+			for (i in 0 until arr.length()) authors.add(arr.getString(i))
+		}
+
+		val tags = mutableSetOf<MangaTag>()
+		comicNode?.optJSONArray("genres")?.let { arr ->
+			for (i in 0 until arr.length()) {
+				val tag = arr.getString(i)
+				val formatted = tag.replace("_", " ").toCamelCase()
+				tags.add(MangaTag(formatted, tag, source))
+			}
+		}
+
+		val uploadStatus = comicNode?.optString("uploadStatus")
+		val originalStatus = comicNode?.optString("originalStatus")
+		val statusStr = if (uploadStatus != "null" && !uploadStatus.isNullOrBlank()) uploadStatus else originalStatus
+
+		val state = when (statusStr?.lowercase()) {
+			"ongoing" -> MangaState.ONGOING
+			"completed" -> MangaState.FINISHED
+			"hiatus" -> MangaState.PAUSED
+			"cancelled" -> MangaState.ABANDONED
+			else -> null
+		}
 
 		val chapters = mutableListOf<MangaChapter>()
-
 		if (chapterList != null) {
 			for (i in 0 until chapterList.length()) {
-				val data = chapterList.getJSONObject(i).optJSONObject("data") ?: continue
-				val dname = data.optString("dname")
-				val titlePart = data.optString("title")
-				val fullTitle = if (titlePart.isNotEmpty()) "$dname - $titlePart" else dname
-				val dateTs = data.optLong("dateModify").takeIf { it > 0 } ?: data.optLong("dateCreate")
+				val chapData = chapterList.optJSONObject(i)?.optJSONObject("data") ?: continue
+				val dname = chapData.optString("dname")
+				val titlePart = chapData.optString("title")
+				val fullTitle = if (titlePart != "null" && titlePart.isNotEmpty()) "$dname - $titlePart" else dname
+
+				val dateTs = chapData.optLong("dateModify").takeIf { it > 0 } ?: chapData.optLong("dateCreate")
 
 				chapters.add(
 					MangaChapter(
-						id = generateUid(data.optString("id")),
+						id = generateUid(chapData.optString("id")),
 						title = fullTitle,
 						number = parseChapterNumber(dname),
 						volume = 0,
-						url = data.optString("urlPath"),
+						url = chapData.optString("urlPath"),
 						uploadDate = dateTs * 1000L,
 						source = source,
-						scanlator = data.optJSONObject("userNode")?.optJSONObject("data")?.optString("name")
-							?: data.optString("srcTitle"),
+						scanlator = chapData.optJSONObject("userNode")?.optJSONObject("data")?.optString("name")
+							?: chapData.optString("srcTitle"),
 						branch = null
 					)
 				)
@@ -167,17 +206,18 @@ internal class MangaPark(context: MangaLoaderContext) :
 		}
 
 		return manga.copy(
-			authors = setOfNotNull(details.first),
-			description = details.second,
-			state = details.third,
+			title = comicNode?.optString("name") ?: manga.title,
+			authors = authors,
+			description = comicNode?.optString("summary"),
+			state = state,
 			chapters = chapters,
-			tags = emptySet(),
+			tags = tags,
 			contentRating = null
 		)
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val chapterId = chapter.id
+		val chapterId = chapter.url.substringAfterLast('/').substringBefore('-')
 
 		val query = $$"""
             query($id: ID!) {
@@ -192,15 +232,16 @@ internal class MangaPark(context: MangaLoaderContext) :
         """
 
 		val json = graphqlRequest(query, JSONObject().put("id", chapterId))
-		val urls = json.optJSONObject("data")
-			?.optJSONObject("get_chapterNode")
-			?.optJSONObject("data")
+		val chapterNode = json.optJSONObject("data")?.optJSONObject("get_chapterNode")
+		val urls = chapterNode?.optJSONObject("data")
 			?.optJSONObject("imageFile")
 			?.optJSONArray("urlList") ?: return emptyList()
 
 		val pages = ArrayList<MangaPage>(urls.length())
 		for (i in 0 until urls.length()) {
-			val url = urls.getString(i)
+			var url = urls.getString(i)
+			url = url.replace(Regex("s\\d\\d"), "s00")
+
 			pages.add(
 				MangaPage(
 					id = generateUid(url),
@@ -222,8 +263,8 @@ internal class MangaPark(context: MangaLoaderContext) :
 		// FIX 3: Converted URL string to HttpUrl and Map to Headers for correct overload
 		val responseBody = webClient.httpPost(
 			url = apiUrl.toHttpUrl(),
-			payload = payload.toString(),
-			extraHeaders = Headers.Builder()
+			body = payload,
+			extraHeaders = getRequestHeaders().newBuilder()
 				.add("Content-Type", "application/json")
 				.add("Referer", "https://$domain/")
 				.build()
