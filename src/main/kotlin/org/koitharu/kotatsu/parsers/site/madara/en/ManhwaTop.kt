@@ -1,7 +1,7 @@
 package org.koitharu.kotatsu.parsers.site.madara.en
 
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.nodes.Document
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.model.MangaChapter
