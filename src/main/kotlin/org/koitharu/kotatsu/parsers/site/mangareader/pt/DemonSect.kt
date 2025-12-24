@@ -1,4 +1,4 @@
-package org.koitharu.kotatsu.parsers.site.madara.pt
+package org.koitharu.kotatsu.parsers.site.mangareader.pt
 
 import okhttp3.Headers.Companion.headersOf
 import okhttp3.HttpUrl.Companion.toHttpUrl
