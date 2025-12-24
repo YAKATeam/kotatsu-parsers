@@ -3,6 +3,7 @@ package org.koitharu.kotatsu.parsers.site.madara
 import androidx.collection.scatterSetOf
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -134,7 +135,7 @@ internal abstract class MadaraParser(
 		"en curso",
 		"ongoing",
 		"on going",
-        "OnGoing",
+		"OnGoing",
 		"ativo",
 		"en cours",
 		"en cours \uD83D\uDFE2",
@@ -160,7 +161,15 @@ internal abstract class MadaraParser(
 		"en marcha",
 		"publicandose",
 		"publicando",
+		"连载중",
 		"连载中",
+		"đang làm",
+		"em postagem",
+		"devam eden",
+		"em progresso",
+		"atualizações semanais",
+		"em lançamento",
+		"devam ediyo",
 	)
 
 	@JvmField
@@ -192,6 +201,9 @@ internal abstract class MadaraParser(
 		"bitmiş",
 		"end",
 		"منتهية",
+		"hoàn thành",
+		"tamamlanan",
+		"مكتمل",
 	)
 
 	@JvmField
@@ -204,6 +216,11 @@ internal abstract class MadaraParser(
 		"dropped",
 		"discontinued",
 		"abandonné",
+		"iptal edildi",
+		"đã hủy",
+		"ملغي",
+		"заброшено",
+		"annulé",
 	)
 
 	@JvmField
@@ -214,6 +231,11 @@ internal abstract class MadaraParser(
 		"en espera",
 		"en pause",
 		"en attente",
+		"durduruldu",
+		"beklemede",
+		"đang chờ",
+		"متوقف",
+		"заморожено",
 	)
 
 	@JvmField
@@ -222,6 +244,7 @@ internal abstract class MadaraParser(
 		"لم تُنشَر بعد",
 		"prochainement",
 		"à venir",
+		"in arrivo",
 	)
 
 	// can be changed to retrieve tags see getTags
@@ -553,6 +576,7 @@ internal abstract class MadaraParser(
 			"div.post-content_item:contains(状态), div.post-content_item:contains(الحالة), div.post-content_item:contains(Tình trạng)"
 	protected open val selectAlt =
 		".post-content_item:contains(Alt) .summary-content, .post-content_item:contains(Nomes alternativos: ) .summary-content"
+	protected open val seriesTypeSelector = ".post-content_item:contains(Type) .summary-content"
 
 	protected open suspend fun createMangaTag(a: Element): MangaTag? {
 		return MangaTag(
@@ -589,12 +613,18 @@ internal abstract class MadaraParser(
 		}
 
 		val alt = doc.body().select(selectAlt).firstOrNull()?.tableValue()?.textOrNull()
+		val seriesType = doc.selectFirst(seriesTypeSelector)?.ownText()?.takeIf { it.isNotBlank() && it != "-" }
+
+		val tags = doc.body().select(selectGenre).mapToSet { a -> createMangaTag(a) }.filterNotNull().toMutableSet()
+		seriesType?.let {
+			tags.add(MangaTag(it.lowercase(), it.toTitleCase(), source))
+		}
 
 		manga.copy(
 			title = doc.selectFirst("h1")?.textOrNull() ?: manga.title,
 			url = href,
 			publicUrl = href.toAbsoluteUrl(domain),
-			tags = doc.body().select(selectGenre).mapToSet { a -> createMangaTag(a) }.filterNotNull().toSet(),
+			tags = tags,
 			description = desc,
 			altTitles = setOfNotNull(alt),
 			state = state,
@@ -612,6 +642,7 @@ internal abstract class MadaraParser(
 	protected open val selectChapter = "li.wp-manga-chapter"
 
 	protected open suspend fun getChapters(manga: Manga, doc: Document): List<MangaChapter> {
+		countViews(doc)
 		val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
 		return doc.body().select(selectChapter).mapChapters(reversed = true) { i, li ->
 			val a = li.selectFirstOrThrow("a")
@@ -695,6 +726,28 @@ internal abstract class MadaraParser(
 		}
 	}
 
+	protected open val sendViewCount: Boolean = true
+
+	protected open suspend fun countViews(doc: Document) {
+		if (!sendViewCount) return
+		try {
+			val wpMangaData = doc.selectFirst("script#wp-manga-js-extra")?.data() ?: return
+			val wpMangaInfo = wpMangaData.substringAfter("var manga = ").substringBeforeLast(";")
+			val wpManga = JSONObject(wpMangaInfo)
+
+			if (wpManga.optString("enable_manga_view") == "1") {
+				val payload = mutableMapOf<String, String>()
+				payload["action"] = "manga_views"
+				payload["manga"] = wpManga.getString("manga_id")
+				if (wpManga.has("chapter_slug")) {
+					payload["chapter"] = wpManga.getString("chapter_slug")
+				}
+				webClient.httpPost("https://$domain/wp-admin/admin-ajax.php", payload)
+			}
+		} catch (_: Exception) {
+		}
+	}
+
 	protected open val selectBodyPage = "div.main-col-inner div.reading-content"
 	protected open val selectPage = "div.page-break"
 	protected open val selectRequiredLogin = ".content-blocked, .login-required"
@@ -702,6 +755,7 @@ internal abstract class MadaraParser(
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val fullUrl = chapter.url.toAbsoluteUrl(domain)
 		val doc = webClient.httpGet(fullUrl).parseHtml()
+		countViews(doc)
 		val chapterProtector = doc.getElementById("chapter-protector-data")
 		if (chapterProtector == null) {
 			throw if (doc.selectFirst(selectRequiredLogin) != null) {
@@ -742,17 +796,26 @@ internal abstract class MadaraParser(
 			val ciphertext = "Salted__".toByteArray(Charsets.UTF_8) + salt + unsaltedCiphertext
 
 			val rawImgArray = CryptoAES(context).decrypt(context.encodeBase64(ciphertext), password)
-			val imgArrayString = rawImgArray.filterNot { c -> c == '[' || c == ']' || c == '\\' || c == '"' }
+			val imgArrayString = if (rawImgArray.startsWith("\"") && rawImgArray.endsWith("\"")) {
+				JSONObject("{\"data\":$rawImgArray}").getString("data")
+			} else {
+				rawImgArray
+			}
+			val imgArray = JSONArray(imgArrayString)
 
-			return imgArrayString.split(",").map { url ->
-				MangaPage(
-					id = generateUid(url),
-					url = url,
-					preview = null,
-					source = source,
+			val pages = mutableListOf<MangaPage>()
+			for (i in 0 until imgArray.length()) {
+				val url = imgArray.getString(i)
+				pages.add(
+					MangaPage(
+						id = generateUid(url),
+						url = url,
+						preview = null,
+						source = source,
+					),
 				)
 			}
-
+			return pages
 		}
 	}
 
@@ -761,13 +824,13 @@ internal abstract class MadaraParser(
 		return when {
 
 			WordSet(
-				" ago", "atrás", " hace", " publicado", " назад", " önce", " trước", "مضت",
+				" ago", "atrás", " hace", " publicado", " назад", " önce", " trước", "مضت", "قبل",
 				" h", " d", " días", " jour", " horas", " heure", " mins", " minutos", " minute", " mois",
 			).endsWith(d) -> {
 				parseRelativeDate(d)
 			}
 
-			WordSet("há ", "منذ", "il y a").startsWith(d) -> {
+			WordSet("há ", "منذ", "il y a", "hace", "giờ", "phút", "giây").startsWith(d) -> {
 				parseRelativeDate(d)
 			}
 
@@ -800,6 +863,10 @@ internal abstract class MadaraParser(
 				}.timeInMillis
 			}
 
+			d.contains(Regex("""\b\d+ jour""")) -> {
+				parseRelativeDate(d)
+			}
+
 			date.contains(Regex("""\d(st|nd|rd|th)""")) -> date.split(" ").map {
 				if (it.contains(Regex("""\d\D\D"""))) {
 					it.replace(Regex("""\D"""), "")
@@ -816,22 +883,25 @@ internal abstract class MadaraParser(
 		val number = Regex("""(\d+)""").find(date)?.value?.toIntOrNull() ?: return 0
 		val cal = Calendar.getInstance()
 		return when {
-			WordSet("detik", "segundo", "second", "ثوان")
+			WordSet("detik", "segundo", "second", "วินาที", "giây", "ثوان")
 				.anyWordIn(date) -> cal.apply { add(Calendar.SECOND, -number) }.timeInMillis
 
-			WordSet("menit", "dakika", "min", "minute", "minutes", "minuto", "mins", "phút", "минут", "دقيقة")
+			WordSet("menit", "dakika", "min", "minute", "minutes", "minuto", "mins", "นาที", "دقائق", "phút", "минут", "دقيقة")
 				.anyWordIn(date) -> cal.apply { add(Calendar.MINUTE, -number) }.timeInMillis
 
-			WordSet("jam", "saat", "heure", "hora", "horas", "hour", "hours", "h", "ساعات", "ساعة")
+			WordSet("jam", "saat", "heure", "hora", "horas", "hour", "hours", "h", "ชั่วโมง", "giờ", "ore", "ساعة", "小时", "ساعات")
 				.anyWordIn(date) -> cal.apply { add(Calendar.HOUR, -number) }.timeInMillis
 
-			WordSet("hari", "gün", "jour", "día", "dia", "day", "días", "days", "d", "день")
+			WordSet("hari", "gün", "jour", "día", "dia", "day", "days", "días", "d", "วัน", "ngày", "giorni", "أيام", "天", "день")
 				.anyWordIn(date) -> cal.apply { add(Calendar.DAY_OF_MONTH, -number) }.timeInMillis
 
-			WordSet("month", "months", "أشهر", "mois", "meses", "mes")
+			WordSet("week", "semana", "tuần", "أسابيع", "أسبوع").anyWordIn(date) ->
+				cal.apply { add(Calendar.DAY_OF_MONTH, -number * 7) }.timeInMillis
+
+			WordSet("month", "months", "mes", "meses", "tháng", "أشهر", "mois")
 				.anyWordIn(date) -> cal.apply { add(Calendar.MONTH, -number) }.timeInMillis
 
-			WordSet("year")
+			WordSet("year", "año", "năm")
 				.anyWordIn(date) -> cal.apply { add(Calendar.YEAR, -number) }.timeInMillis
 
 			else -> 0
