@@ -218,7 +218,7 @@ internal class MangaGo(context: MangaLoaderContext) :
                         getDescramblingKey('$url');
                     """.trimIndent()
                     
-                    val key = context.evaluateJs("https://$domain", script, 30000L)
+                    val key = context.evaluateJs("https://$domain", script)
                     if (!key.isNullOrBlank()) {
                         finalUrl = "$url#desckey=$key&cols=$cols"
                     }
@@ -279,11 +279,11 @@ internal class MangaGo(context: MangaLoaderContext) :
             val keyVal = keyArray.getOrNull(idx)?.ifEmpty { "0" }?.toIntOrNull() ?: 0
 
             // Logic ported from Tachiyomi 'unscrambleImage'
-            val heightY = keyVal.floorDiv(cols)
+            val heightY = floor(keyVal.toDouble() / cols).toInt()
             val dy = heightY * unitHeight
             val dx = (keyVal - heightY * cols) * unitWidth
 
-            val widthY = idx.floorDiv(cols)
+            val widthY = floor(idx.toDouble() / cols).toInt()
             val sy = widthY * unitHeight
             val sx = (idx - widthY * cols) * unitWidth
             
@@ -371,11 +371,11 @@ internal class MangaGo(context: MangaLoaderContext) :
             }.distinct().toList()
 
             val unscrambleKey = keyLocations.map {
-                imgList[it].toString().toInt()
-            }.toList()
+                imgList[it].digitToInt()
+            }
 
             keyLocations.forEachIndexed { idx, it ->
-                imgList = imgList.removeRange(it - idx..it - idx)
+                imgList = imgList.removeRange(it - idx, it - idx + 1)
             }
 
             imgList = unscrambleString(imgList, unscrambleKey)
