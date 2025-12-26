@@ -199,11 +199,14 @@ internal abstract class MangaFireParser(
 
 			when {
 				!filter.query.isNullOrEmpty() -> {
-					// Keyword + vrf
+					val stdQuery = filter.query.replace("\"", " ").trim()
 					append("&keyword=")
-					append(URLEncoder.encode(filter.query, "UTF-8"))
+					append(URLEncoder.encode(stdQuery, "UTF-8"))
+					
+					// Use evaluateJs to get vrf from the site's own script if possible
+					// Or stick to the current generator but ensure it's matched
 					append("&vrf=")
-					append(VrfGenerator.generate(filter.query))
+					append(VrfGenerator.generate(stdQuery))
 
 					append("&sort=")
 					append(when (order) {

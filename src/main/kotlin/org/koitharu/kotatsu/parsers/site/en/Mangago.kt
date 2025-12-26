@@ -26,7 +26,7 @@ internal class MangaGo(context: MangaLoaderContext) :
 
     override fun getRequestHeaders(): Headers = super.getRequestHeaders().newBuilder()
         .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .add("Cookie", "adult_confirmed=1; stay=1; _m_superu=1")
+        .add("Cookie", "adult_confirmed=1; stay=1")
         .build()
 
     override val availableSortOrders: Set<SortOrder> = EnumSet.of(
@@ -65,38 +65,31 @@ internal class MangaGo(context: MangaLoaderContext) :
         val url = if (!filter.query.isNullOrEmpty()) {
             "https://$domain/r/l_search/?name=${filter.query.urlEncoded()}&page=$page"
         } else {
-            val genre = filter.tags.firstOrNull()?.key ?: "all"
-            "https://$domain/genre/${genre.lowercase()}/$page/?$sortParam"
+            val genre = filter.tags.firstOrNull()?.key ?: "All"
+            "https://$domain/genre/$genre/$page/?$sortParam"
         }
 
         val response = webClient.httpGet(url)
         val doc = response.parseHtml()
-        val items = doc.select(".updatesli, .pic_list > li").takeIf { it.isNotEmpty() }
-            ?: doc.select("ul#search_list > li").takeIf { it.isNotEmpty() }
+        val items = doc.select("ul#search_list > li").takeIf { it.isNotEmpty() }
             ?: doc.select("div.listitem").takeIf { it.isNotEmpty() }
             ?: doc.select("div.row")
 
         return items.mapNotNull { element ->
-            val linkElement = element.selectFirst(".thm-effect")
+            val linkEl = element.selectFirst("a.thm-effect") 
                 ?: element.selectFirst("h2 a")
                 ?: element.selectFirst("h3 a")
-                ?: element.selectFirst("span.title a")
-                ?: element.selectFirst("span.tit a")
-                ?: element.selectFirst("a[href*=/read-manga/]:not(:has(img))")
+                ?: element.selectFirst("a[href*=/read-manga/]")
             
-            if (linkElement == null) {
-                return@mapNotNull null
-            }
-            val title = linkElement.attr("title").takeIf { it.isNotEmpty() } ?: linkElement.text()
-            val href = linkElement.attr("href")
+            if (linkEl == null) return@mapNotNull null
+            
+            val title = linkEl.attr("title").takeIf { it.isNotEmpty() } ?: linkEl.text()
+            val href = linkEl.attr("href")
             val relativeUrl = href.toRelativeUrl(domain)
             val absoluteUrl = href.toAbsoluteUrl(domain)
             
             val imgEl = element.selectFirst("img")
-            val img = (imgEl?.attr("data-src")
-                ?: imgEl?.attr("data-original")
-                ?: imgEl?.attr("src"))?.takeIf { it.isNotEmpty() && !it.startsWith("data:") }
-                ?.toAbsoluteUrl(domain)
+            val img = imgEl?.src()
 
             Manga(
                 id = generateUid(relativeUrl),
@@ -135,7 +128,7 @@ internal class MangaGo(context: MangaLoaderContext) :
             else -> null
         }
 
-        val chapters = doc.select("table#chapter_table tr, table.uk-table tr").mapIndexedNotNull { i, tr ->
+        val chapters = doc.select("table#chapter_table tr").mapIndexedNotNull { i, tr ->
             val a = tr.selectFirst("a.chico") ?: return@mapIndexedNotNull null
             val href = a.attr("href")
             val chapterTitle = a.text()
@@ -154,7 +147,8 @@ internal class MangaGo(context: MangaLoaderContext) :
             )
         }.reversed()
 
-        val coverUrl = doc.selectFirst("div.manga_left img")?.attr("src")?.toAbsoluteUrl(domain)
+        val imgEl = doc.selectFirst("div.manga_left img")
+        val coverUrl = imgEl?.src()
 
         return manga.copy(
             title = title,
@@ -224,7 +218,7 @@ internal class MangaGo(context: MangaLoaderContext) :
                         getDescramblingKey('$url');
                     """.trimIndent()
                     
-                    val key = context.evaluateJs("https://$domain", script)
+                    val key = context.evaluateJs("https://$domain", script, 30000L)
                     if (!key.isNullOrBlank()) {
                         finalUrl = "$url#desckey=$key&cols=$cols"
                     }
@@ -247,6 +241,16 @@ internal class MangaGo(context: MangaLoaderContext) :
     // ---------------------------------------------------------------
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
+        val url = request.url.toString()
+        
+        if (url.contains("mangapicgallery.com")) {
+            val newRequest = request.newBuilder()
+                .header("Referer", "https://$domain/")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .build()
+            return chain.proceed(newRequest)
+        }
+
         val response = chain.proceed(request)
         val frag = request.url.fragment ?: return response
 
@@ -275,11 +279,11 @@ internal class MangaGo(context: MangaLoaderContext) :
             val keyVal = keyArray.getOrNull(idx)?.ifEmpty { "0" }?.toIntOrNull() ?: 0
 
             // Logic ported from Tachiyomi 'unscrambleImage'
-            val heightY = floor(keyVal.toDouble() / cols).toInt()
+            val heightY = keyVal.floorDiv(cols)
             val dy = heightY * unitHeight
             val dx = (keyVal - heightY * cols) * unitWidth
 
-            val widthY = floor(idx.toDouble() / cols).toInt()
+            val widthY = idx.floorDiv(cols)
             val sy = widthY * unitHeight
             val sx = (idx - widthY * cols) * unitWidth
             
@@ -336,15 +340,15 @@ internal class MangaGo(context: MangaLoaderContext) :
             .replace("img.src", "url")
     }
 
-    private val keyLocationRegex = Regex("""str\.charAt\(\s*(\d+)\s*\)""")
-
     private fun decryptAes(b64: String, hexKey: String, hexIv: String): String {
         try {
             val keyBytes = hexStringToByteArray(hexKey)
             val ivBytes = hexStringToByteArray(hexIv)
             val inputBytes = Base64.getDecoder().decode(b64)
 
-            // Keiyoushi uses AES/CBC/ZEROBYTEPADDING
+            // Tachiyomi uses AES/CBC/ZEROBYTEPADDING via BouncyCastle usually.
+            // Standard Java 'NoPadding' works if data is aligned, or 'PKCS5Padding' if standard.
+            // Since we receive a clean string, NoPadding usually suffices for this source.
             val cipher = Cipher.getInstance("AES/CBC/NoPadding")
             val keySpec = SecretKeySpec(keyBytes, "AES")
             val ivSpec = IvParameterSpec(ivBytes)
@@ -352,8 +356,7 @@ internal class MangaGo(context: MangaLoaderContext) :
             cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
             val decryptedBytes = cipher.doFinal(inputBytes)
 
-            // ZEROBYTEPADDING means we might have trailing zeros
-            return String(decryptedBytes, Charsets.UTF_8).trim { it <= '\u0000' }
+            return String(decryptedBytes, Charsets.UTF_8).trim { it <= '\u0020' }
         } catch (e: Exception) {
             throw Exception("Failed to decrypt image list: ${e.message}")
         }
@@ -361,42 +364,41 @@ internal class MangaGo(context: MangaLoaderContext) :
 
     private fun unescrambleImageList(imageList: String, js: String): String {
         var imgList = imageList
-        
+        val keyLocationRegex = Regex("""str\.charAt\(\s*(\d+)\s*\)""")
         try {
             val keyLocations = keyLocationRegex.findAll(js).map {
                 it.groupValues[1].toInt()
             }.distinct().toList()
 
-            // Extract the 'keys' used for unscrambling from the string itself
             val unscrambleKey = keyLocations.map {
                 imgList[it].toString().toInt()
-            }
+            }.toList()
 
-            // Remove the key characters from the string
             keyLocations.forEachIndexed { idx, it ->
-                imgList = imgList.removeRange(it - idx, it - idx + 1)
+                imgList = imgList.removeRange(it - idx..it - idx)
             }
 
-            // Perform the unscramble swap
             imgList = unscrambleString(imgList, unscrambleKey)
         } catch (e: Exception) {
-            // If failure, it might already be unscrambled
+            // ignore
         }
-        return imgList
+        return imgList.trim { it <= '\u0020' }
     }
 
     private fun unscrambleString(str: String, keys: List<Int>): String {
-        var s = str
+        val sb = StringBuilder(str)
         keys.reversed().forEach { key ->
-            for (i in s.length - 1 downTo key) {
+            for (i in sb.length - 1 downTo key) {
                 if (i % 2 != 0) {
-                    val temp = s[i - key]
-                    s = s.replaceRange(i - key..i - key, s[i].toString())
-                    s = s.replaceRange(i..i, temp.toString())
+                    val idxA = i - key
+                    val idxB = i
+                    val temp = sb[idxA]
+                    sb.setCharAt(idxA, sb[idxB])
+                    sb.setCharAt(idxB, temp)
                 }
             }
         }
-        return s
+        return sb.toString()
     }
 
     private fun hexStringToByteArray(s: String): ByteArray {

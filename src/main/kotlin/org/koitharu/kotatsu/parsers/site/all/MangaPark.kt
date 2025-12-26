@@ -20,23 +20,9 @@ import java.util.*
 internal class MangaPark(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.MANGAPARK, 24) {
 
-	        override val configKeyDomain = ConfigKey.Domain(
-	                "mangapark.net",
-	                "mangapark.com",
-	                "mangapark.org",
-	                "mangapark.me",
-	                "mangapark.io",
-	                "mangapark.to",
-	                "comicpark.org",
-	                "comicpark.to",
-	                "readpark.org",
-	                "readpark.net",
-	                "parkmanga.com",
-	                "parkmanga.net",
-	                "parkmanga.org",
-	                "mpark.to"
-	        )
-		private val apiUrl = "https://$domain/apo/"
+	override val configKeyDomain = ConfigKey.Domain("mangapark.io")
+
+	private val apiUrl = "https://$domain/apo/"
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.UPDATED)
 
