@@ -336,6 +336,8 @@ internal class MangaGo(context: MangaLoaderContext) :
             .replace("img.src", "url")
     }
 
+    private val keyLocationRegex = Regex("""str\.charAt\(\s*(\d+)\s*\)""")
+
     private fun decryptAes(b64: String, hexKey: String, hexIv: String): String {
         try {
             val keyBytes = hexStringToByteArray(hexKey)
@@ -368,7 +370,7 @@ internal class MangaGo(context: MangaLoaderContext) :
             // Extract the 'keys' used for unscrambling from the string itself
             val unscrambleKey = keyLocations.map {
                 imgList[it].toString().toInt()
-            }.toList()
+            }
 
             // Remove the key characters from the string
             keyLocations.forEachIndexed { idx, it ->
