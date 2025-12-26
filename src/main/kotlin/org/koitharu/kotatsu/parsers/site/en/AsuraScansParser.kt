@@ -183,9 +183,17 @@ internal class AsuraScansParser(context: MangaLoaderContext) :
 				val stableUrl = "/series/$slug/chapter/$chapterNum"
 				val date = div.selectLast("h3")?.text().orEmpty()
 				val cleanDate = date.replace(regexDate, "$1")
+				val titleElement = div.selectFirst("h3")
+				val chapterLabel = titleElement?.ownText()?.trim()?.takeIf { it.isNotEmpty() }
+				val chapterTitle = titleElement?.selectFirst("span")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+				val fullTitle = when {
+					chapterLabel != null && chapterTitle != null -> "$chapterLabel - $chapterTitle"
+					chapterLabel != null -> chapterLabel
+					else -> chapterTitle
+				}
 				MangaChapter(
 					id = generateUid(stableUrl),
-					title = div.selectFirst("h3")?.textOrNull(),
+					title = fullTitle,
 					number = i + 1f,
 					volume = 0,
 					url = url,
