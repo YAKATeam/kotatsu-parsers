@@ -1,5 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.all
 
+import okhttp3.Headers
 import org.json.JSONObject
 import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
@@ -12,18 +13,12 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.ceil
 
-@Broken("Need to re-write this parser to handle all")
 @MangaSourceParser("WEEBDEX", "WeebDex")
 internal class WeebDex(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.WEEBDEX, pageSize = 24) {
 
 	override val configKeyDomain = ConfigKey.Domain("weebdex.org")
 	private val apiUrl = "https://api.weebdex.org"
-
-	override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
-		.add("Origin", "https://$domain")
-		.add("Referer", "https://$domain/")
-		.build()
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
 		SortOrder.UPDATED,
@@ -37,7 +32,7 @@ internal class WeebDex(context: MangaLoaderContext) :
 			isSearchSupported = true,
 			isSearchWithFiltersSupported = true,
 			isMultipleTagsSupported = true,
-			isOriginalLocaleSupported = true,
+			isOriginalLocaleSupported = true
 		)
 
 	override suspend fun getFilterOptions(): MangaListFilterOptions {
@@ -58,6 +53,12 @@ internal class WeebDex(context: MangaLoaderContext) :
 			)
 		)
 	}
+
+	override fun getRequestHeaders(): Headers =
+		super.getRequestHeaders().newBuilder()
+			.add("Origin", "https://$domain")
+			.add("Referer", "https://$domain/")
+			.build()
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		val url = buildString {
@@ -116,17 +117,32 @@ internal class WeebDex(context: MangaLoaderContext) :
 			}
 		}
 
-		val response = webClient.httpGet(url).parseJson()
+		val response = webClient.httpGet(url, getRequestHeaders()).parseJson()
 		val data = response.optJSONArray("data") ?: return emptyList()
 
-		return (0 until data.length()).map { i ->
-			parseMangaJson(data.getJSONObject(i))
+		return (0 until data.length()).mapNotNull { i ->
+			val json = data.getJSONObject(i)
+			if (json.optString("last_chapter").isEmpty() && json.optString("last_volume").isEmpty()) {
+				val tagsArr = json.optJSONObject("relationships")?.optJSONArray("tags")
+				var isOneshot = false
+				if (tagsArr != null) {
+					for (k in 0 until tagsArr.length()) {
+						if (tagsArr.getJSONObject(k).getString("name") == "Oneshot") {
+							isOneshot = true
+							break
+						}
+					}
+				}
+				if (!isOneshot) return@mapNotNull null
+			}
+			parseMangaJson(json)
 		}
 	}
 
 	override suspend fun getDetails(manga: Manga): Manga {
-		val mangaUrl = "$apiUrl/manga/${manga.id}"
-		val response = webClient.httpGet(mangaUrl).parseJson()
+		val originalId = manga.url.substringAfterLast("/")
+		val mangaUrl = "$apiUrl/manga/$originalId"
+		val response = webClient.httpGet(mangaUrl, getRequestHeaders()).parseJson()
 		val baseManga = parseMangaJson(response)
 
 		val allChapters = ArrayList<MangaChapter>()
@@ -135,7 +151,7 @@ internal class WeebDex(context: MangaLoaderContext) :
 
 		while (true) {
 			val chaptersUrl = "$mangaUrl/chapters?limit=100&page=$page&order=desc$langParam"
-			val chResponse = webClient.httpGet(chaptersUrl).parseJson()
+			val chResponse = webClient.httpGet(chaptersUrl, getRequestHeaders()).parseJson()
 			val data = chResponse.optJSONArray("data") ?: break
 
 			if (data.length() == 0) break
@@ -204,7 +220,7 @@ internal class WeebDex(context: MangaLoaderContext) :
 		val chapterId = chapter.url.substringAfterLast("/")
 		val url = "$apiUrl/chapter/$chapterId"
 
-		val response = webClient.httpGet(url).parseJson()
+		val response = webClient.httpGet(url, getRequestHeaders()).parseJson()
 		val node = response.getString("node")
 		val data = response.getJSONArray("data")
 
@@ -293,12 +309,14 @@ internal class WeebDex(context: MangaLoaderContext) :
 		)
 	}
 
-	private fun fetchTags(): Set<MangaTag> {
-		val commonTags = listOf(
-			"Action", "Adventure", "Comedy", "Drama", "Fantasy", "Horror", "Mystery",
-			"Psychological", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural",
-			"Thriller", "Tragedy", "Yaoi", "Yuri", "Mecha", "Isekai"
-		)
-		return commonTags.map { MangaTag(it, it, source) }.toSet()
+	private suspend fun fetchTags(): Set<MangaTag> {
+		val response = webClient.httpGet("$apiUrl/manga/tag").parseJson()
+		val data = response.optJSONArray("data") ?: return emptySet()
+		val tags = mutableSetOf<MangaTag>()
+		for (i in 0 until data.length()) {
+			val t = data.getJSONObject(i)
+			tags.add(MangaTag(key = t.getString("id"), title = t.getString("name"), source = source))
+		}
+		return tags
 	}
 }
