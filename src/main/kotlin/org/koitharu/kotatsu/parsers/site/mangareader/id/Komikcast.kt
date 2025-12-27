@@ -211,7 +211,7 @@ internal class Komikcast(context: MangaLoaderContext) :
 			MangaState.FINISHED
 		}
 		val author = docs.selectFirst(".komik_info-content-meta span:contains(Author)")
-			?.lastElementChild()?.textOrNull()
+			?.ownTextOrNull()
 		val nsfw = docs.select("div")
 			.any { it.text().contains("Peringatan", ignoreCase = true) && it.text().contains("konten", ignoreCase = true) }
 
