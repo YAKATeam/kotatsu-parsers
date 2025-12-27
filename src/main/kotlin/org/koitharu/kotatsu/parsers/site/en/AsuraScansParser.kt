@@ -8,6 +8,7 @@ import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
+import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
 import org.koitharu.kotatsu.parsers.util.json.asTypedList
@@ -186,7 +187,8 @@ internal class AsuraScansParser(context: MangaLoaderContext) :
 					?.text()?.replace(regexDate, "$1")
 					.orEmpty()
 
-				val stableUrl = "/series/$slug/chapter/$chapterNum"
+				val stableUrl = if (!slug.isEmpty() && !chapterNum.isEmpty()) { "/series/$slug/chapter/$chapterNum" }
+					else throw ParseException("Can't find valid url for chapter", urlRelative)
 
 				val titleElement = div.selectFirst("h3")
 				val chapterLabel = titleElement?.ownText()?.trim()?.takeIf { it.isNotEmpty() }
