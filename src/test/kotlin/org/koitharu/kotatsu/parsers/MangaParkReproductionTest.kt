@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.model.SortOrder
 import org.koitharu.kotatsu.parsers.model.search.MangaSearchQuery
-import org.koitharu.kotatsu.parsers.test_util.MangaLoaderContextMock
 import kotlin.time.Duration.Companion.minutes
 
 internal class MangaParkReproductionTest {
