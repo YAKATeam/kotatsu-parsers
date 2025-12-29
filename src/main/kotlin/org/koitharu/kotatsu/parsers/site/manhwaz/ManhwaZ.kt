@@ -175,43 +175,50 @@ internal abstract class ManhwaZ(
 		}
 	}
 
-	protected open val secondAgo = listOf(
+	@JvmField
+	protected val secondAgo: Set<String> = setOf(
 		"giây trước",
 		"second ago",
 		"seconds ago"
 	)
 
-	protected open val minuteAgo = listOf(
+	@JvmField
+	protected val minuteAgo: Set<String> = setOf(
 		"phút trước",
 		"minute ago",
 		"minutes ago"
 	)
 
-	protected open val hourAgo = listOf(
+	@JvmField
+	protected val hourAgo: Set<String> = setOf(
 		"giờ trước",
 		"hour ago",
 		"hours ago"
 	)
 
-	protected open val dayAgo = listOf(
+	@JvmField
+	protected val dayAgo: Set<String> = setOf(
 		"ngày trước",
 		"day ago",
 		"days ago"
 	)
 
-	protected open val weekAgo = listOf(
+	@JvmField
+	protected val weekAgo: Set<String> = setOf(
 		"tuần trước",
 		"week ago",
 		"weeks ago"
 	)
 
-	protected open val monthAgo = listOf(
+	@JvmField
+	protected val monthAgo: Set<String> = setOf(
 		"tháng trước",
 		"month ago",
 		"months ago"
 	)
 
-	protected open val yearAgo = listOf(
+	@JvmField
+	protected val yearAgo: Set<String> = setOf(
 		"năm trước",
 		"year ago",
 		"years ago"
@@ -247,7 +254,7 @@ internal abstract class ManhwaZ(
 		}
 	}
 
-	private fun String.removeSuffixes(suffixes: List<String>): String =
+	private fun String.removeSuffixes(suffixes: Set<String>): String =
 		suffixes.fold(this) { text, suffix ->
 			text.replace(suffix, "")
 		}.trim()
@@ -263,7 +270,9 @@ internal abstract class ManhwaZ(
 		}
 	}
 
-	private suspend fun fetchTags(): Set<MangaTag> = webClient.httpGet("https://$domain/genre").parseHtml()
+	protected open val tagPath = "genre"
+
+	private suspend fun fetchTags(): Set<MangaTag> = webClient.httpGet("https://$domain/$tagPath").parseHtml()
 		.select("ul.page-genres li a")
 		.mapToSet { a ->
 			val title = a.ownText().toTitleCase(sourceLocale)
