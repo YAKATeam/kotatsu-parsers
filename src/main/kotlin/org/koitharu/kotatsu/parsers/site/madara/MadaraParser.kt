@@ -161,6 +161,13 @@ internal abstract class MadaraParser(
 		"publicandose",
 		"publicando",
 		"连载中",
+		"đang làm",
+		"em postagem",
+		"devam eden",
+		"em progresso",
+		"atualizações semanais",
+		"em lançamento",
+		"devam ediyo",
 	)
 
 	@JvmField
@@ -192,6 +199,8 @@ internal abstract class MadaraParser(
 		"bitmiş",
 		"end",
 		"منتهية",
+		"tamamlanan",
+		"مكتمل",
 	)
 
 	@JvmField
@@ -204,6 +213,11 @@ internal abstract class MadaraParser(
 		"dropped",
 		"discontinued",
 		"abandonné",
+		"iptal edildi",
+		"đã hủy",
+		"ملغي",
+		"заброшено",
+		"annulé",
 	)
 
 	@JvmField
@@ -214,6 +228,11 @@ internal abstract class MadaraParser(
 		"en espera",
 		"en pause",
 		"en attente",
+		"durduruldu",
+		"beklemede",
+		"đang chờ",
+		"متوقف",
+		"заморожено",
 	)
 
 	@JvmField
@@ -222,6 +241,7 @@ internal abstract class MadaraParser(
 		"لم تُنشَر بعد",
 		"prochainement",
 		"à venir",
+		"in arrivo",
 	)
 
 	// can be changed to retrieve tags see getTags
@@ -761,13 +781,13 @@ internal abstract class MadaraParser(
 		return when {
 
 			WordSet(
-				" ago", "atrás", " hace", " publicado", " назад", " önce", " trước", "مضت",
+				" ago", "atrás", " hace", " publicado", " назад", " önce", " trước", "مضت", "قبل",
 				" h", " d", " días", " jour", " horas", " heure", " mins", " minutos", " minute", " mois",
 			).endsWith(d) -> {
 				parseRelativeDate(d)
 			}
 
-			WordSet("há ", "منذ", "il y a").startsWith(d) -> {
+			WordSet("há ", "منذ", "il y a", "hace", "giờ", "phút", "giây").startsWith(d) -> {
 				parseRelativeDate(d)
 			}
 
@@ -800,6 +820,10 @@ internal abstract class MadaraParser(
 				}.timeInMillis
 			}
 
+			d.contains(Regex("""\b\d+ jour""")) -> {
+				parseRelativeDate(d)
+			}
+
 			date.contains(Regex("""\d(st|nd|rd|th)""")) -> date.split(" ").map {
 				if (it.contains(Regex("""\d\D\D"""))) {
 					it.replace(Regex("""\D"""), "")
@@ -816,22 +840,25 @@ internal abstract class MadaraParser(
 		val number = Regex("""(\d+)""").find(date)?.value?.toIntOrNull() ?: return 0
 		val cal = Calendar.getInstance()
 		return when {
-			WordSet("detik", "segundo", "second", "ثوان")
+			WordSet("detik", "segundo", "second", "วินาที", "giây", "ثوان")
 				.anyWordIn(date) -> cal.apply { add(Calendar.SECOND, -number) }.timeInMillis
 
-			WordSet("menit", "dakika", "min", "minute", "minutes", "minuto", "mins", "phút", "минут", "دقيقة")
+			WordSet("menit", "dakika", "min", "minute", "minutes", "minuto", "mins", "นาที", "دقائق", "phút", "минут", "دقيقة")
 				.anyWordIn(date) -> cal.apply { add(Calendar.MINUTE, -number) }.timeInMillis
 
-			WordSet("jam", "saat", "heure", "hora", "horas", "hour", "hours", "h", "ساعات", "ساعة")
+			WordSet("jam", "saat", "heure", "hora", "horas", "hour", "hours", "h", "ชั่วโมง", "giờ", "ore", "ساعة", "小时", "ساعات")
 				.anyWordIn(date) -> cal.apply { add(Calendar.HOUR, -number) }.timeInMillis
 
-			WordSet("hari", "gün", "jour", "día", "dia", "day", "días", "days", "d", "день")
+			WordSet("hari", "gün", "jour", "día", "dia", "day", "days", "días", "d", "วัน", "ngày", "giorni", "أيام", "天", "день")
 				.anyWordIn(date) -> cal.apply { add(Calendar.DAY_OF_MONTH, -number) }.timeInMillis
 
-			WordSet("month", "months", "أشهر", "mois", "meses", "mes")
+			WordSet("week", "semana", "tuần", "أسابيع", "أسبوع").anyWordIn(date) ->
+				cal.apply { add(Calendar.DAY_OF_MONTH, -number * 7) }.timeInMillis
+
+			WordSet("month", "months", "mes", "meses", "tháng", "أشهر", "mois")
 				.anyWordIn(date) -> cal.apply { add(Calendar.MONTH, -number) }.timeInMillis
 
-			WordSet("year")
+			WordSet("year", "año", "năm")
 				.anyWordIn(date) -> cal.apply { add(Calendar.YEAR, -number) }.timeInMillis
 
 			else -> 0

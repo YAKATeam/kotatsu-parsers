@@ -155,7 +155,7 @@ internal class DesuMeParser(context: MangaLoaderContext) :
             .getJSONObject("response") ?: throw ParseException("Invalid response", fullUrl)
         return json.getJSONObject("pages").getJSONArray("list").mapJSON { jo ->
             MangaPage(
-                id = generateUid(jo.getLong("id")),
+                id = generateUid(jo.getLong("pages")),
                 preview = null,
                 source = chapter.source,
                 url = jo.getString("img"),

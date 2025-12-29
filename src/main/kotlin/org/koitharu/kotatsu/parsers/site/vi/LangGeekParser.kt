@@ -103,9 +103,9 @@ internal class LangGeekParser(context: MangaLoaderContext):
 	private fun parseMangaSearch(json: JSONObject): List<Manga> {
 		val suggestions = json.getJSONArray("suggestions")
 
-		return (0 until suggestions.length()).map { index ->
+		return (0 until suggestions.length()).mapNotNull { index ->
 			val item = suggestions.getJSONObject(index)
-			val href = item.getString("url")
+			val href = item.getString("url") ?: return@mapNotNull null
 			Manga(
 				id = generateUid(href),
 				url = href,

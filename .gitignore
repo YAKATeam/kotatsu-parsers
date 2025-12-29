@@ -83,7 +83,6 @@ bin/
 .idea/kotlinc.xml
 
 src/test/resources/cookies.txt
-local.properties
 .kotlin/
 !/.idea/kotlin-statistics.xml
 
@@ -96,3 +95,9 @@ local.properties
 /.idea/copilot.data.migration.ask.xml
 /.idea/copilot.data.migration.ask2agent.xml
 /.idea/copilot.data.migration.edit.xml
+
+# Visual Studio Code
+.vscode/
+
+# Config file
+*.properties

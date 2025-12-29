@@ -1,5 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.madara.en
 
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
@@ -17,10 +18,11 @@ internal class ManhwaTop(context: MangaLoaderContext) :
 
 	override suspend fun loadChapters(mangaUrl: String, document: Document): List<MangaChapter> {
 
-		val mangaId = document.select("div#manga-chapters-holder").attr("data-id")
-		val url = "https://$domain/wp-admin/admin-ajax.php"
-		val postData = "action=manga_get_chapters&manga=$mangaId"
-		val doc = webClient.httpPost(url, postData).parseHtml()
+		val url = mangaUrl.toAbsoluteUrl(domain).removeSuffix("/") + "/ajax/chapters/"
+		val headers = okhttp3.Headers.Builder()
+			.add("X-Requested-With", "XMLHttpRequest")
+			.build()
+		val doc = webClient.httpPost(url.toHttpUrl(), "", headers).parseHtml()
 
 		val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
 

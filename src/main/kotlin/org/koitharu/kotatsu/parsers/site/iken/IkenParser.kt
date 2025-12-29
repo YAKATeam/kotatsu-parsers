@@ -141,7 +141,7 @@ internal abstract class IkenParser(
 		val data = json.getJSONArray("chapters").asTypedList<JSONObject>()
 		val dateFormat = SimpleDateFormat(datePattern, Locale.ENGLISH)
 		return manga.copy(
-			chapters = data.mapChapters(reversed = true) { i, it ->
+			chapters = data.mapChapters(reversed = true) { _, it ->
 				val slugName = if (slug.isNullOrEmpty()) {
 					it.getJSONObject("mangaPost").getString("slug")
 				} else {
