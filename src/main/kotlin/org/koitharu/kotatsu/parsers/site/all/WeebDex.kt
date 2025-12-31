@@ -1,7 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.all
 
 import org.json.JSONObject
-import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -12,13 +11,12 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.ceil
 
-@Broken("Need to re-write this parser to handle all")
 @MangaSourceParser("WEEBDEX", "WeebDex")
 internal class WeebDex(context: MangaLoaderContext) :
-	PagedMangaParser(context, MangaParserSource.WEEBDEX, pageSize = 24) {
+	PagedMangaParser(context, MangaParserSource.WEEBDEX, 24) {
 
+	private val cdnDomain = "srv.notdelta.xyz"
 	override val configKeyDomain = ConfigKey.Domain("weebdex.org")
-	private val apiUrl = "https://api.weebdex.org"
 
 	override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
 		.add("Origin", "https://$domain")
@@ -29,7 +27,8 @@ internal class WeebDex(context: MangaLoaderContext) :
 		SortOrder.UPDATED,
 		SortOrder.NEWEST,
 		SortOrder.ALPHABETICAL,
-		SortOrder.RATING
+		SortOrder.ALPHABETICAL_DESC,
+		SortOrder.RATING,
 	)
 
 	override val filterCapabilities: MangaListFilterCapabilities
@@ -37,7 +36,6 @@ internal class WeebDex(context: MangaLoaderContext) :
 			isSearchSupported = true,
 			isSearchWithFiltersSupported = true,
 			isMultipleTagsSupported = true,
-			isOriginalLocaleSupported = true,
 		)
 
 	override suspend fun getFilterOptions(): MangaListFilterOptions {
@@ -47,51 +45,116 @@ internal class WeebDex(context: MangaLoaderContext) :
 			availableContentRating = EnumSet.of(
 				ContentRating.SAFE,
 				ContentRating.SUGGESTIVE,
-				ContentRating.ADULT // Fixed: Combined Erotica/Pornographic into ADULT
+				ContentRating.ADULT,
 			),
 			availableLocales = setOf(
 				Locale.ENGLISH,
-				Locale.JAPANESE,
+				Locale("af"), // Afrikaans
+				Locale("sq"), // Albanian
+				Locale("ar"), // Arabic
+				Locale("az"), // Azerbaijani
+				Locale("eu"), // Basque
+				Locale("be"), // Belarusian
+				Locale("bn"), // Bengali
+				Locale("bg"), // Bulgarian
+				Locale("my"), // Burmese
+				Locale("ca"), // Catalan
 				Locale.CHINESE,
+				Locale("zh-hk"), // Chinese (Traditional)
+				Locale("cv"), // Chuvash
+				Locale("hr"), // Croatian
+				Locale("cs"), // Czech
+				Locale("da"), // Danish
+				Locale("nl"), // Dutch
+				Locale("eo"), // Esperanto
+				Locale("et"), // Estonian
+				Locale("tl"), // Filipino
+				Locale("fi"), // Finnish
+				Locale.FRENCH,
+				Locale("ka"), // Georgian
+				Locale.GERMAN,
+				Locale("el"), // Greek
+				Locale("he"), // Hebrew
+				Locale("hi"), // Hindi
+				Locale("hu"), // Hungarian
+				Locale("id"), // Indonesian
+				Locale("jv"), // Javanese
+				Locale("ga"), // Irish
+				Locale.ITALIAN,
+				Locale.JAPANESE,
+				Locale("kk"), // Kazakh
 				Locale.KOREAN,
-				Locale("id") // Indonesian
-			)
+				Locale("la"), // Latin
+				Locale("lt"), // Lithuanian
+				Locale("ms"), // Malay
+				Locale("mn"), // Mongolian
+				Locale("ne"), // Nepali
+				Locale("no"), // Norwegian
+				Locale("fa"), // Persian (Farsi)
+				Locale("pl"), // Polish
+				Locale("pt"), // Portuguese
+				Locale("pt-br"), // Portuguese (Brazil)
+				Locale("ro"), // Romanian
+				Locale("ru"), // Russian
+				Locale("sr"), // Serbian
+				Locale("sk"), // Slovak
+				Locale("sl"), // Slovenian
+				Locale("es"), // Spanish
+				Locale("es-la"), // Spanish (LATAM)
+				Locale("sv"), // Swedish
+				Locale("tam"), // Tamil
+				Locale("te"), // Telugu
+				Locale("th"), // Thai
+				Locale("tr"), // Turkish
+				Locale("uk"), // Ukrainian
+				Locale("ur"), // Urdu
+				Locale("uz"), // Uzbek
+				Locale("vi"), // Vietnamese
+			),
 		)
 	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		val url = buildString {
-			append("$apiUrl/manga?limit=$pageSize&page=$page")
+			append("/manga?limit=$pageSize")
 
+			// Paging
+			append("&page=")
+			append(page)
+
+			// SortOrder mapping
+			when (order) {
+				SortOrder.NEWEST -> append("&sort=createdAt")
+				SortOrder.ALPHABETICAL -> {
+					append("&sort=title")
+					append("&order=asc")
+				}
+				SortOrder.ALPHABETICAL_DESC -> {
+					append("&sort=title")
+					append("&order=desc")
+				}
+				SortOrder.RATING -> append("&sort=followedCount")
+				else -> append("&sort=updatedAt")
+			}
+
+			// Keyword
 			if (!filter.query.isNullOrEmpty()) {
 				append("&title=${filter.query.urlEncoded()}")
 			}
 
-			// Sort mapping
-			val sortOrder = when (order) {
-				SortOrder.UPDATED -> "updatedAt"
-				SortOrder.NEWEST -> "createdAt"
-				SortOrder.ALPHABETICAL -> "title"
-				SortOrder.RATING -> "followedCount"
-				else -> "updatedAt"
-			}
-			append("&sort=$sortOrder")
-			val direction = if (order == SortOrder.ALPHABETICAL) "asc" else "desc"
-			append("&order=$direction")
-
 			// Filters
-			if (filter.contentRating.isNotEmpty()) {
-				filter.contentRating.forEach { rating ->
-					when (rating) {
-						ContentRating.SAFE -> append("&contentRating=safe")
-						ContentRating.SUGGESTIVE -> append("&contentRating=suggestive")
-						else -> append("&contentRating=erotica&contentRating=pornographic")
+			filter.contentRating.forEach {
+				when (it) {
+					ContentRating.SAFE -> append("&contentRating=safe")
+					ContentRating.SUGGESTIVE -> append("&contentRating=suggestive")
+					ContentRating.ADULT -> {
+						append("&contentRating=erotica")
+						append("&contentRating=pornographic")
 					}
 				}
-			} else {
-				append("&contentRating=safe&contentRating=suggestive")
 			}
 
+			// States
 			if (filter.states.isNotEmpty()) {
 				filter.states.forEach { state ->
 					val statusParam = when (state) {
@@ -111,12 +174,12 @@ internal class WeebDex(context: MangaLoaderContext) :
 			}
 
 			// Apply Locale Filter if selected in search
-			filter.originalLocale?.let { locale ->
-				append("&originalLanguage[]=${locale.language}")
+			filter.locale?.let { locale ->
+				append("&availableTranslatedLang=${locale.language}")
 			}
 		}
 
-		val response = webClient.httpGet(url).parseJson()
+		val response = webClient.httpGet(url.toAbsoluteUrl("api.$domain")).parseJson()
 		val data = response.optJSONArray("data") ?: return emptyList()
 
 		return (0 until data.length()).map { i ->
@@ -125,7 +188,7 @@ internal class WeebDex(context: MangaLoaderContext) :
 	}
 
 	override suspend fun getDetails(manga: Manga): Manga {
-		val mangaUrl = "$apiUrl/manga/${manga.id}"
+		val mangaUrl = "api.$domain/manga/${manga.id}"
 		val response = webClient.httpGet(mangaUrl).parseJson()
 		val baseManga = parseMangaJson(response)
 
@@ -202,7 +265,7 @@ internal class WeebDex(context: MangaLoaderContext) :
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val chapterId = chapter.url.substringAfterLast("/")
-		val url = "$apiUrl/chapter/$chapterId"
+		val url = "api.$domain/chapter/$chapterId"
 
 		val response = webClient.httpGet(url).parseJson()
 		val node = response.getString("node")
@@ -231,10 +294,12 @@ internal class WeebDex(context: MangaLoaderContext) :
 		val relationships = json.optJSONObject("relationships")
 
 		var coverUrl: String? = null
+		var largeCoverUrl: String? = null
 		val coverObj = relationships?.optJSONObject("cover")
 		if (coverObj != null) {
 			val coverId = coverObj.getString("id")
-			coverUrl = "https://srv.notdelta.xyz/covers/$id/$coverId.256.webp"
+			coverUrl = "https://$cdnDomain/covers/$id/$coverId.256.webp"
+			largeCoverUrl = "https://$cdnDomain/covers/$id/$coverId.512.webp"
 		}
 
 		val authors = mutableSetOf<String>()
@@ -281,6 +346,7 @@ internal class WeebDex(context: MangaLoaderContext) :
 			url = "/manga/$id",
 			publicUrl = "https://$domain/title/$id",
 			coverUrl = coverUrl,
+			largeCoverUrl = largeCoverUrl,
 			title = title,
 			altTitles = emptySet(),
 			rating = RATING_UNKNOWN,
