@@ -11,9 +11,9 @@ import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.*
 import java.text.SimpleDateFormat
 
-@MangaSourceParser("MANHWA_READ", "ManhwaRead", "en", ContentType.HENTAI)
+@MangaSourceParser("MANHWAREAD", "ManhwaRead", "en", ContentType.HENTAI)
 internal class ManhwaRead(context: MangaLoaderContext) :
-    MadaraParser(context, MangaParserSource.MANHWA_READ, "manhwaread.com", 30) {
+    MadaraParser(context, MangaParserSource.MANHWAREAD, "manhwaread.com", 30) {
 
     override val tagPrefix = "genre/"
     override val datePattern = "dd/MM/yyyy"
@@ -22,10 +22,10 @@ internal class ManhwaRead(context: MangaLoaderContext) :
 
     override suspend fun fetchAvailableTags(): Set<MangaTag> {
         val doc = webClient.httpGet("https://$domain/genre-index/").parseHtml()
-        return doc.select("#mainTermsList li a").mapNotNullToSet { a ->
+        return doc.select("#mainTermsList li a").mapToSet { a ->
             MangaTag(
                 key = a.attr("href").removeSuffix("/").substringAfterLast('/'),
-                title = a.selectFirst("span")?.text()?.toTitleCase() ?: return@mapNotNullToSet null,
+                title = a.selectFirst("span")?.text()?.toTitleCase().orEmpty(),
                 source = source
             )
         }
@@ -71,9 +71,11 @@ internal class ManhwaRead(context: MangaLoaderContext) :
             )
         }
 
-        val statusText = doc.selectFirst(".manga-status__label")?.text()?.lowercase()
+        val statusText = doc.selectFirst(".manga-status__label")
+			?.text()?.lowercase()
+			.orEmpty()
+
         val status = when {
-            statusText == null -> null
             statusText.contains("ongoing") -> MangaState.ONGOING
             statusText.contains("completed") -> MangaState.FINISHED
             statusText.contains("hiatus") -> MangaState.PAUSED
@@ -82,7 +84,7 @@ internal class ManhwaRead(context: MangaLoaderContext) :
         }
 
         val authors = doc.select("a[href*='/author/'], a[href*='/artist/']").mapNotNullToSet {
-            it.text().substringBeforeLast(" ").trim()
+            it.text()
         }
 
         return manga.copy(
@@ -98,7 +100,8 @@ internal class ManhwaRead(context: MangaLoaderContext) :
         val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
         return doc.select("#chaptersList a.chapter-item").mapChapters(reversed = true) { i, a ->
             val href = a.attrAsRelativeUrl("href")
-            val name = a.selectFirst(".chapter-item__name")?.text() ?: a.text()
+            val name = a.selectFirst(".chapter-item__name")?.text()
+				?: a.text()
             val dateText = a.selectFirst(".chapter-item__date")?.text()
 
             MangaChapter(
@@ -124,24 +127,18 @@ internal class ManhwaRead(context: MangaLoaderContext) :
         val jsonStr = script.substringAfter("var chapterData = ").substringBeforeLast(";")
         val jsonObj = JSONObject(jsonStr)
         val dataEncoded = jsonObj.getString("data")
-        val decodedData = String(context.decodeBase64(dataEncoded))
-        val jsonArray = JSONArray(decodedData)
+        val jsonArray = JSONArray(String(context.decodeBase64(dataEncoded)))
         val base = jsonObj.optString("base", "").removeSuffix("/")
-
-        val pages = ArrayList<MangaPage>(jsonArray.length())
-        for (i in 0 until jsonArray.length()) {
-            val item = jsonArray.getJSONObject(i)
-            val src = item.getString("src").removePrefix("/")
-            val url = if (base.isNotEmpty()) "$base/$src" else src
-            pages.add(
-                MangaPage(
-                    id = generateUid(url),
-                    url = url,
-                    preview = null,
-                    source = source
-                )
-            )
-        }
-        return pages
+		return List(jsonArray.length()) { i ->
+			val item = jsonArray.getJSONObject(i)
+			val src = item.getString("src").removePrefix("/")
+			val url = if (base.isNotEmpty()) "$base/$src" else src
+			MangaPage(
+				id = generateUid(url),
+				url = url,
+				preview = null,
+				source = source
+			)
+		}
     }
 }
