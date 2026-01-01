@@ -245,8 +245,10 @@ internal class WeebDex(context: MangaLoaderContext) :
 			url.addQueryParameter("authorOrArtist", filter.author)
 		}
 
-		val response = webClient.httpGet(url.build()).parseJson()
-		return response.getJSONArray("data").mapJSON { jo ->
+		val js = webClient.httpGet(url.build()).parseJson()
+		// prevent throw Exception for empty result
+		val response = js.optJSONArray("data") ?: return emptyList()
+		return response.mapJSON { jo ->
 			val id = jo.getString("id")
 			val title = jo.getString("title")
 			val relationships = jo.getJSONObject("relationships")
