@@ -29,7 +29,7 @@ internal class BatoToV4Parser(context: MangaLoaderContext) : PagedMangaParser(
 	pageSize = 36,
 ) {
 
-	override val configKeyDomain = ConfigKey.Domain("bato.to", "bato.si", "bato.ing", "battwo.com")
+	override val configKeyDomain = ConfigKey.Domain("bato.si", "battwo.com", "bato.to", "bato.ing")
 	override val userAgentKey = ConfigKey.UserAgent(UserAgents.CHROME_DESKTOP)
 
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
@@ -83,7 +83,7 @@ internal class BatoToV4Parser(context: MangaLoaderContext) : PagedMangaParser(
 				put("incGenres", JSONArray(filter.tags.map { it.key }))
 				put("excGenres", JSONArray(filter.tagsExclude.map { it.key }))
 				put("incOLangs", JSONArray())
-				put("incTLangs", JSONArray(filter.locale?.let { listOf(it.language) } ?: emptyList()))
+				put("incTLangs", JSONArray(filter.locale?.let { listOf(it.language) } ?: emptyList<String>()))
 				put("origStatus", filter.states.firstOrNull()?.let {
 					when (it) {
 						MangaState.ONGOING -> "ongoing"
@@ -142,20 +142,33 @@ internal class BatoToV4Parser(context: MangaLoaderContext) : PagedMangaParser(
 		return data.mapJSON { item ->
 			val chapter = item.getJSONObject("data")
 			val id = chapter.getString("id")
-			val name = chapter.getString("dname")
+			val name = chapter.optString("dname").takeIf { it.isNotBlank() && it != "null" }
+			val title = chapter.optString("title").takeIf { it.isNotBlank() && it != "null" }
 			val serial = chapter.getDouble("serial")
-			val title = chapter.optString("title")
-			
-MangaChapter(
+
+			val groups = chapter.optJSONObject("groupNodes")?.optJSONArray("data")
+				?.asTypedList<JSONObject>()
+				?.mapNotNull { it.optString("name").takeIf { s -> s.isNotBlank() && s != "null" } }
+				?.joinToString()
+				.takeIf { !it.isNullOrBlank() }
+				?: chapter.optJSONObject("userNode")?.optJSONObject("data")?.optString("name")
+					?.takeIf { it != "null" }
+
+			MangaChapter(
 				id = generateUid(id),
-				title = if (title.isNullOrEmpty()) name else "$name: $title",
+				title = when {
+					name != null && title != null -> "$name: $title"
+					name != null -> name
+					title != null -> title
+					else -> null
+				},
 				number = serial.toFloat(),
 				volume = 0,
 				url = "$comicId/$id",
 				uploadDate = chapter.optLong("dateModify", chapter.optLong("dateCreate", 0)),
 				source = source,
-				scanlator = null,
-				branch = null
+				scanlator = groups,
+				branch = groups
 			)
 		}.asReversed()
 	}
@@ -169,8 +182,8 @@ MangaChapter(
 		val data = response.getJSONObject("data").getJSONObject("get_chapterNode").getJSONObject("data")
 		val urls = data.getJSONObject("imageFile").getJSONArray("urlList")
 
-		return urls.mapJSON { url ->
-			val urlString = url.toString()
+		return (0 until urls.length()).map { i ->
+			val urlString = urls.getString(i)
 			MangaPage(
 				id = generateUid(urlString),
 				url = urlString + "#page",
@@ -261,7 +274,7 @@ MangaChapter(
 	}
 
 	companion object {
-		private val SERVER_PATTERN = Regex("https://[a-zA-Z]\d{2}")
+		private val SERVER_PATTERN = Regex("https://[a-zA-Z]\\d{2}")
 		private val SERVERS = listOf(
 			"n03", "n00", "n01", "n02", "n04", "n05", "n06", "n07", "n08", "n09", "n10",
 			"k03", "k06", "k07", "k00", "k01", "k02", "k04", "k05", "k08", "k09"
@@ -311,14 +324,14 @@ MangaChapter(
 			"Beasts" to "beasts",
 			"Bodyswap" to "bodyswap",
 			"Boys" to "boys",
-			"cars" to "cars",
+			"Cars" to "cars",
 			"Cheating/Infidelity" to "cheating_infidelity",
 			"Childhood Friends" to "childhood_friends",
 			"College Life" to "college_life",
 			"Comedy" to "comedy",
 			"Contest Winning" to "contest_winning",
 			"Cooking" to "cooking",
-			"crime" to "crime",
+			"Crime" to "crime",
 			"Crossdressing" to "crossdressing",
 			"Delinquents" to "delinquents",
 			"Dementia" to "dementia",
@@ -358,7 +371,7 @@ MangaChapter(
 			"Ninja" to "ninja",
 			"Office Workers" to "office_workers",
 			"Omegaverse" to "omegaverse",
-			"parody" to "parody",
+			"Parody" to "parody",
 			"Philosophical" to "philosophical",
 			"Police" to "police",
 			"Post-Apocalyptic" to "post_apocalyptic",
