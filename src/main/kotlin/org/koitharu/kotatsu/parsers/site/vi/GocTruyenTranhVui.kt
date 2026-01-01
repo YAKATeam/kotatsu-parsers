@@ -22,6 +22,9 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
     PagedMangaParser(context, MangaParserSource.GOCTRUYENTRANHVUI, 50), MangaParserAuthProvider {
 
     override val configKeyDomain = ConfigKey.Domain("goctruyentranhvui17.com")
+	override val userAgentKey = ConfigKey.UserAgent(
+		"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.46 Mobile Safari/537.36",
+	)
     private val apiUrl by lazy { "https://$domain/api/v2" }
 
     private val requestMutex = Mutex()
@@ -33,6 +36,11 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
 		.add("Referer", "https://$domain/")
 		.add("X-Requested-With", "XMLHttpRequest")
 		.build()
+
+	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+		super.onCreateConfig(keys)
+		keys.add(userAgentKey)
+	}
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
         SortOrder.UPDATED,
@@ -55,12 +63,12 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
 		get() = domain
 
 	override suspend fun isAuthorized(): Boolean {
-		val token = WebViewHelper(context)
-			.getLocalStorageValue(domain, "Authorization")
-			?.removeSurrounding('"')
-			?.trim()
-
-		return !token.isNullOrBlank()
+		val token = loadAuthToken()
+		if (!token.isNullOrBlank()) {
+			userToken = token
+			return true
+		}
+		return false
 	}
 
 	override suspend fun getUsername(): String {
@@ -173,8 +181,6 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
             val chapterApiUrl = "https://$domain/api/comic/$comicId/chapter?limit=-1"
 
 			// Auth before send request for chapters
-			userToken = WebViewHelper(context).getLocalStorageValue(domain, "Authorization")
-				?.removeSurrounding('"').toString()
 			if (userToken.isBlank()) {
 				throw AuthRequiredException(
 					source,
@@ -278,7 +284,15 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
         }
     }
 
-    private fun availableTags() = arraySetOf(
+	private suspend fun loadAuthToken(): String? {
+		return WebViewHelper(context)
+			.getLocalStorageValue(domain, "Authorization")
+			?.removeSurrounding('"')
+			?.trim()
+			?.takeIf { it.startsWith("Bearer ") }
+	}
+
+	private fun availableTags() = arraySetOf(
         MangaTag("Anime", "ANI", source),
         MangaTag("Drama", "DRA", source),
         MangaTag("Josei", "JOS", source),
