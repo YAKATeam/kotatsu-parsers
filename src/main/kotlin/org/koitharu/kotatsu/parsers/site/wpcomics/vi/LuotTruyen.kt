@@ -3,6 +3,7 @@ package org.koitharu.kotatsu.parsers.site.wpcomics.vi
 import androidx.collection.ArraySet
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.exception.ParseException
@@ -12,9 +13,10 @@ import org.koitharu.kotatsu.parsers.util.*
 import java.text.SimpleDateFormat
 import java.util.*
 
-@MangaSourceParser("NEWTRUYEN", "NewTruyen", "vi")
-internal class NewTruyen(context: MangaLoaderContext) :
-	WpComicsParser(context, MangaParserSource.NEWTRUYEN, "newtruyentranh5.com", 36) {
+@Broken("Need to handle login + Fix getPages")
+@MangaSourceParser("LUOTTRUYEN", "LuotTruyen", "vi")
+internal class LuotTruyen(context: MangaLoaderContext) :
+	WpComicsParser(context, MangaParserSource.LUOTTRUYEN, "luottruyen1.com", 36) {
 
 	override suspend fun getFilterOptions() = MangaListFilterOptions(
 		availableTags = getAvailableTags(),
@@ -52,10 +54,12 @@ internal class NewTruyen(context: MangaLoaderContext) :
 		)
 	}
 
+	private val selectRequiredLogin = ".page-chapter"
+
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val fullUrl = chapter.url.toAbsoluteUrl(domain)
 		val doc = webClient.httpGet(fullUrl).parseHtml()
-		return doc.select("div.page-chapter").map { url ->
+		return doc.select(selectRequiredLogin).map { url ->
 			val img = url.selectFirst("img")?.attr("src") ?: url.attr("data-src")
 			MangaPage(
 				id = generateUid(img),
