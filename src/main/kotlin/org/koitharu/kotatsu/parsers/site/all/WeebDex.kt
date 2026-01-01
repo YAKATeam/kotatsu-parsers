@@ -1,6 +1,5 @@
 package org.koitharu.kotatsu.parsers.site.all
 
-import org.json.JSONObject
 import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
@@ -10,11 +9,11 @@ import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
 import org.koitharu.kotatsu.parsers.util.json.mapJSON
 import org.koitharu.kotatsu.parsers.util.json.mapJSONNotNull
+import org.koitharu.kotatsu.parsers.util.json.mapJSONNotNullToSet
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.math.ceil
 
-@Broken("Fix getDetails, fetchTags, getPages")
+@Broken("TODO: Handle all tags, fix getDetails, getPages")
 @MangaSourceParser("WEEBDEX", "WeebDex")
 internal class WeebDex(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.WEEBDEX, 28) {
@@ -129,9 +128,10 @@ internal class WeebDex(context: MangaLoaderContext) :
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		val url = urlBuilder().addPathSegment("manga")
-			// Paging
-			.addQueryParameter("limit", pageSize.toString())
-			.addQueryParameter("page", page.toString())
+
+		// Paging
+		url.addQueryParameter("limit", pageSize.toString())
+		url.addQueryParameter("page", page.toString())
 
 		// SortOrder mapping
 		when (order) {
@@ -226,7 +226,8 @@ internal class WeebDex(context: MangaLoaderContext) :
 			url.addQueryParameter("authorOrArtist", filter.author)
 		}
 
-		val response = webClient.httpGet(url.toString().toAbsoluteUrl("api.$domain")).parseJson()
+		val queryUrl = url.toString().toAbsoluteUrl("api.$domain")
+		val response = webClient.httpGet(queryUrl).parseJson()
 		return response.getJSONArray("data").mapJSON { jo ->
 			val id = jo.getString("id")
 			val title = jo.getString("title")
@@ -234,6 +235,8 @@ internal class WeebDex(context: MangaLoaderContext) :
 				.getJSONObject("cover").getString("id")
 
 			val tags = jo.optJSONArray("tags")?.mapJSONNotNull {
+				if (it.getString("group") != "genre")
+					return@mapJSONNotNull null
 				MangaTag(
 					key = it.getString("id"),
 					title = it.getString("name"),
@@ -272,154 +275,8 @@ internal class WeebDex(context: MangaLoaderContext) :
 		}
 	}
 
-	private fun parseMangaJson(json: JSONObject): Manga {
-		val id = json.getString("id")
-		val title = json.getString("title")
-		val desc = json.optString("description")
-		val statusStr = json.optString("status")
-
-		val relationships = json.optJSONObject("relationships")
-
-		var coverUrl: String? = null
-		var largeCoverUrl: String? = null
-		val coverObj = relationships?.optJSONObject("cover")
-		if (coverObj != null) {
-			val coverId = coverObj.getString("id")
-			coverUrl = "https://$cdnDomain/covers/$id/$coverId.256.webp"
-			largeCoverUrl = "https://$cdnDomain/covers/$id/$coverId.512.webp"
-		}
-
-		val authors = mutableSetOf<String>()
-		val authorArr = relationships?.optJSONArray("authors")
-		if (authorArr != null) {
-			for (i in 0 until authorArr.length()) {
-				authors.add(authorArr.getJSONObject(i).getString("name"))
-			}
-		}
-
-		val tags = mutableSetOf<MangaTag>()
-		val tagsArr = relationships?.optJSONArray("tags")
-		if (tagsArr != null) {
-			for (i in 0 until tagsArr.length()) {
-				val t = tagsArr.getJSONObject(i)
-				val tId = t.getString("id")
-				val tName = t.getString("name")
-				tags.add(MangaTag(key = tId, title = tName, source = source))
-			}
-		}
-
-		val demo = json.optString("demographic")
-		if (demo.isNotEmpty() && demo != "null") {
-			tags.add(MangaTag(key = demo, title = demo.replaceFirstChar { it.uppercase() }, source = source))
-		}
-
-		val state = when (statusStr) {
-			"ongoing" -> MangaState.ONGOING
-			"completed" -> MangaState.FINISHED
-			"hiatus" -> MangaState.PAUSED
-			"cancelled" -> MangaState.ABANDONED
-			else -> null
-		}
-
-		val ratingStr = json.optString("contentRating")
-		val contentRating = when(ratingStr) {
-			"erotica", "pornographic" -> ContentRating.ADULT
-			"suggestive" -> ContentRating.SUGGESTIVE
-			else -> ContentRating.SAFE
-		}
-
-		return Manga(
-			id = generateUid(id),
-			url = "/manga/$id",
-			publicUrl = "https://$domain/title/$id",
-			coverUrl = coverUrl,
-			largeCoverUrl = largeCoverUrl,
-			title = title,
-			altTitles = emptySet(),
-			rating = RATING_UNKNOWN,
-			tags = tags,
-			authors = authors,
-			state = state,
-			source = source,
-			description = desc,
-			contentRating = contentRating
-		)
-	}
-
 	override suspend fun getDetails(manga: Manga): Manga {
-		val mangaUrl = "api.$domain/manga/${manga.id}"
-		val response = webClient.httpGet(mangaUrl).parseJson()
-		val baseManga = parseMangaJson(response)
-
-		val allChapters = ArrayList<MangaChapter>()
-		var page = 1
-		val langParam = ""
-
-		while (true) {
-			val chaptersUrl = "$mangaUrl/chapters?limit=100&page=$page&order=desc$langParam"
-			val chResponse = webClient.httpGet(chaptersUrl).parseJson()
-			val data = chResponse.optJSONArray("data") ?: break
-
-			if (data.length() == 0) break
-
-			for (i in 0 until data.length()) {
-				val ch = data.getJSONObject(i)
-				val id = ch.getString("id")
-
-				val vol = ch.optString("volume")
-				val chapNum = ch.optString("chapter")
-				val title = ch.optString("title")
-				val lang = ch.optString("language")
-
-				// Groups
-				val groups = mutableListOf<String>()
-				val rels = ch.optJSONObject("relationships")
-				val groupArr = rels?.optJSONArray("groups")
-				if (groupArr != null) {
-					for (k in 0 until groupArr.length()) {
-						groups.add(groupArr.getJSONObject(k).getString("name"))
-					}
-				}
-				val scanlator = if (groups.isNotEmpty()) groups.joinToString(", ") else null
-
-				// Title Formatting
-				val volStr = if (vol.isNotEmpty() && vol != "null") "Vol. $vol " else ""
-				val chStr = if (chapNum.isNotEmpty() && chapNum != "null") "Ch. $chapNum" else ""
-				val titleStr = if (title.isNotEmpty() && title != "null") " - $title" else ""
-
-				var fullTitle = "$volStr$chStr$titleStr".trim()
-				if (fullTitle.isEmpty()) fullTitle = "Oneshot"
-
-				if (lang.isNotEmpty()) fullTitle += " [$lang]"
-
-				val numFloat = chapNum.toFloatOrNull() ?: -1f
-				val dateStr = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-					.parseSafe(ch.optString("updatedAt"))
-
-				allChapters.add(
-					MangaChapter(
-						id = generateUid(id),
-						title = fullTitle,
-						number = numFloat,
-						volume = vol.toIntOrNull() ?: 0,
-						url = "/chapter/$id",
-						uploadDate = dateStr,
-						source = source,
-						scanlator = scanlator,
-						branch = null
-					)
-				)
-			}
-
-			val total = chResponse.optInt("total", 0)
-			val limit = chResponse.optInt("limit", 100)
-			val totalPages = ceil(total.toDouble() / limit).toInt()
-
-			if (page >= totalPages) break
-			page++
-		}
-
-		return baseManga.copy(chapters = allChapters)
+		return manga.copy()
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
@@ -444,12 +301,18 @@ internal class WeebDex(context: MangaLoaderContext) :
 		}
 	}
 
-	private fun fetchTags(): Set<MangaTag> {
-		val commonTags = listOf(
-			"Action", "Adventure", "Comedy", "Drama", "Fantasy", "Horror", "Mystery",
-			"Psychological", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural",
-			"Thriller", "Tragedy", "Yaoi", "Yuri", "Mecha", "Isekai"
-		)
-		return commonTags.map { MangaTag(it, it, source) }.toSet()
+	private suspend fun fetchTags(): Set<MangaTag> {
+		val url = "https://api.$domain/manga/tag"
+		val response = webClient.httpGet(url).parseJson()
+		val data = response.getJSONArray("data")
+		return data.mapJSONNotNullToSet {
+			if (it.getString("group") != "genre")
+				return@mapJSONNotNullToSet null
+			MangaTag(
+				key = it.getString("id"),
+				title = it.getString("name"),
+				source = source,
+			)
+		}
 	}
 }
