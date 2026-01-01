@@ -19,7 +19,7 @@ private const val SERVER_DATA_SAVER = "256"
 @Broken("TODO: Handle all tags, fix getDetails, getPages")
 @MangaSourceParser("WEEBDEX", "WeebDex")
 internal class WeebDex(context: MangaLoaderContext) :
-	PagedMangaParser(context, MangaParserSource.WEEBDEX, 28) {
+	PagedMangaParser(context, MangaParserSource.WEEBDEX, 42) {
 
 	private val cdnDomain = "srv.notdelta.xyz"
 	override val configKeyDomain = ConfigKey.Domain("weebdex.org")
