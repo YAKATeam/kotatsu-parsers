@@ -60,7 +60,6 @@ public abstract class AbstractMangaParser @InternalParsersApi constructor(
 	final override val domain: String
 		get() = config[configKeyDomain]
 
-	@JvmField
 	protected open val webClient: WebClient = OkHttpWebClient(context.httpClient, source)
 
 	/**

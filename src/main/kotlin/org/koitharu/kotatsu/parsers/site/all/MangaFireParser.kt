@@ -365,7 +365,7 @@ internal abstract class MangaFireParser(
         val readVrfInput = "$mangaId@${branch.type}@${branch.langCode}"
         val readVrf = VrfGenerator.generate(readVrfInput)
 
-        val response = client
+        val response = webClient
             .httpGet("https://$domain/ajax/read/$mangaId/${branch.type}/${branch.langCode}?vrf=$readVrf")
 
         val chapterElements = response.parseJson()
@@ -375,7 +375,7 @@ internal abstract class MangaFireParser(
             .select("ul li a")
 
         if (branch.type == "chapter") {
-            val doc = client
+            val doc = webClient
                 .httpGet("https://$domain/ajax/manga/$mangaId/${branch.type}/${branch.langCode}")
                 .parseJson()
                 .getString("result")
@@ -418,7 +418,7 @@ internal abstract class MangaFireParser(
             val url = it.attrAsRelativeUrl("href")
 
             try {
-                val mangaDocument = client
+                val mangaDocument = webClient
                     .httpGet(url.toAbsoluteUrl(domain))
                     .parseHtml()
 
@@ -495,7 +495,7 @@ internal abstract class MangaFireParser(
 
         val vrf = VrfGenerator.generate("$type@$chapterId")
 
-        val images = client
+        val images = webClient
             .httpGet("https://$domain/ajax/read/$type/$chapterId?vrf=$vrf")
             .parseJson()
             .getJSONObject("result")
