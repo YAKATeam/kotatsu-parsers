@@ -41,6 +41,7 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 
 	override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
 		.add("Referer", "https://$domain/")
+		.add("Origin", "https://$domain")
 		.add("X-App-Key", "toons-mediocre-app")
 		.build()
 

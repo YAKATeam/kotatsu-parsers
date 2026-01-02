@@ -22,7 +22,7 @@ private const val PAGE_SIZE = 20
 internal class CMangaParser(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.CMANGA, PAGE_SIZE), MangaParserAuthProvider {
 
-	override val configKeyDomain: ConfigKey.Domain = ConfigKey.Domain("cmangax8.com")
+	override val configKeyDomain: ConfigKey.Domain = ConfigKey.Domain("cmangax9.com")
 
 	override val availableSortOrders: Set<SortOrder>
 		get() = EnumSet.of(
@@ -78,8 +78,8 @@ internal class CMangaParser(context: MangaLoaderContext) :
 		return manga.copy(
 			chapters = webClient
 				.httpGet("/api/chapter_list?album=$mangaId&page=1&limit=${Int.MAX_VALUE}&v=0v21".toAbsoluteUrl(domain))
-				.parseJsonArray()
-				.mapChapters(reversed = true) { _, jo ->
+				.parseJson().getJSONArray("data")
+				.mapJSONNotNull { jo ->
 					val chapterId = jo.getLong("id_chapter")
 					val info = jo.parseJson("info")
 					val chapterNumber = info.getFloatOrDefault("num", -1f)
@@ -99,7 +99,7 @@ internal class CMangaParser(context: MangaLoaderContext) :
 						scanlator = null,
 						source = source,
 					)
-				},
+				}.reversed(),
 		)
 	}
 
@@ -148,7 +148,8 @@ internal class CMangaParser(context: MangaLoaderContext) :
 			)
 		}.build()
 
-		val mangaList = webClient.httpGet(url).parseJson().getJSONArray("data")
+		val mangaList = webClient.httpGet(url).parseJson()
+			.getJSONObject("data").getJSONArray("data")
 		return mangaList.mapJSONNotNull { jo ->
 			val info = jo.parseJson("info")
 			val slug = info.getStringOrNull("url") ?: return@mapJSONNotNull null
@@ -194,7 +195,7 @@ internal class CMangaParser(context: MangaLoaderContext) :
 			throw IllegalStateException("This chapter is locked, you would need to buy it from website")
 		}
 
-		return pageResponse.getJSONArray("image").asTypedList<String>().map {
+		return pageResponse.getJSONObject("data").getJSONArray("image").asTypedList<String>().map {
 			MangaPage(
 				id = generateUid(it),
 				url = it,

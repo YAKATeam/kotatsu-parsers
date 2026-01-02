@@ -14,7 +14,7 @@ import java.util.*
 @MangaSourceParser("HANGTRUYEN", "Hang Truyện", "vi")
 internal class HangTruyen(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.HANGTRUYEN, 10) {
 
-	override val configKeyDomain = ConfigKey.Domain("hangtruyen.org")
+	override val configKeyDomain = ConfigKey.Domain("hangtruyen.page")
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
         SortOrder.UPDATED,
@@ -46,21 +46,21 @@ internal class HangTruyen(context: MangaLoaderContext) : PagedMangaParser(contex
 		val url = buildString {
 			append("/tim-kiem?page=")
 			append(page)
-			
+
 			if (filter.types.isNotEmpty()) {
 				append("&categoryIds=")
 				val categoryIds = filter.types.joinToString(",") { type ->
 					when (type) {
 						ContentType.MANGA -> "1"
 						ContentType.MANHUA -> "2"
-						ContentType.MANHWA -> "3" 
+						ContentType.MANHWA -> "3"
 						ContentType.COMICS -> "4,5"
 						else -> "1,2,3,4,5"
 					}
 				}
 				append(categoryIds)
 			}
-			
+
 			if (filter.tags.isNotEmpty()) {
 				append("&genreIds=")
 				filter.tags.joinTo(this, separator = ",") { it.key }
@@ -115,14 +115,14 @@ internal class HangTruyen(context: MangaLoaderContext) : PagedMangaParser(contex
 	override suspend fun getDetails(manga: Manga): Manga {
 		val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
 		val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ENGLISH)
-		
+
 		val script = doc.selectFirst("script:containsData(const mangaDetail)")?.data() ?: return manga
 		val mangaDetailJson = script.substringAfter("const mangaDetail = ").substringBefore(";")
 		val mangaDetail = JSONObject(mangaDetailJson)
 
 		val mangaSlug = mangaDetail.getString("slug")
 		val adultTagIds = setOf("29", "31", "210", "211", "175", "41", "212")
-		
+
 		val tags = mangaDetail.getJSONArray("genres").mapJSONToSet { genre ->
 			MangaTag(
 				key = genre.getInt("id").toString(),
@@ -130,7 +130,7 @@ internal class HangTruyen(context: MangaLoaderContext) : PagedMangaParser(contex
 				source = source,
 			)
 		}
-		
+
 		val isAdult = tags.any { it.key in adultTagIds }
 
 		return manga.copy(
@@ -140,7 +140,7 @@ internal class HangTruyen(context: MangaLoaderContext) : PagedMangaParser(contex
 			description = mangaDetail.getString("overview").orEmpty(),
 			state = when (mangaDetail.optInt("status")) {
 				0 -> MangaState.ONGOING
-				1 -> MangaState.FINISHED  
+				1 -> MangaState.FINISHED
 				else -> null
 			},
 			contentRating = if (isAdult) ContentRating.ADULT else ContentRating.SAFE,
@@ -165,11 +165,11 @@ internal class HangTruyen(context: MangaLoaderContext) : PagedMangaParser(contex
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val fullUrl = chapter.url.toAbsoluteUrl(domain)
 		val doc = webClient.httpGet(fullUrl).parseHtml()
-		
+
 		val script = doc.selectFirst("script:containsData(const mangaDetail)")?.data() ?: return emptyList()
 		val chapterDetailJson = script.substringAfter("const chapterDetail = ").substringBefore("}</script>") + "}"
 		val chapterDetail = JSONObject(chapterDetailJson)
-		
+
 		return chapterDetail.getJSONArray("images").mapJSON { image ->
 			val url = image.getString("path")
 			val index = image.getInt("index")

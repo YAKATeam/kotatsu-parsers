@@ -13,31 +13,42 @@ import org.koitharu.kotatsu.parsers.core.PagedMangaParser
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
 import org.json.JSONObject
+import org.koitharu.kotatsu.parsers.MangaParserAuthProvider
+import org.koitharu.kotatsu.parsers.exception.AuthRequiredException
+import org.koitharu.kotatsu.parsers.util.json.asTypedList
 import java.util.*
+import kotlin.collections.map
 
 @MangaSourceParser("GOCTRUYENTRANHVUI", "Góc Truyện Tranh Vui", "vi")
 internal class GocTruyenTranhVui(context: MangaLoaderContext):
-    PagedMangaParser(context, MangaParserSource.GOCTRUYENTRANHVUI, 50) {
+    PagedMangaParser(context, MangaParserSource.GOCTRUYENTRANHVUI, 50), MangaParserAuthProvider {
 
     override val configKeyDomain = ConfigKey.Domain("goctruyentranhvui17.com")
+	override val userAgentKey = ConfigKey.UserAgent(
+		"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.46 Mobile Safari/537.36",
+	)
     private val apiUrl by lazy { "https://$domain/api/v2" }
 
     private val requestMutex = Mutex()
     private var lastRequestTime = 0L
+	private var userToken: String = ""
 
-    private val apiHeaders by lazy {
-        Headers.Builder()
-            .add("Authorization", TOKEN_KEY)
-            .add("Referer", "https://$domain/")
-            .add("X-Requested-With", "XMLHttpRequest")
-            .build()
-    }
+	private fun apiHeaders(): Headers = Headers.Builder()
+		.add("Authorization", userToken)
+		.add("Referer", "https://$domain/")
+		.add("X-Requested-With", "XMLHttpRequest")
+		.build()
 
-    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+		super.onCreateConfig(keys)
+		keys.add(userAgentKey)
+	}
+
+	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
         SortOrder.UPDATED,
         SortOrder.POPULARITY,
         SortOrder.NEWEST,
-        SortOrder.RATING
+        SortOrder.RATING,
     )
 
     override val filterCapabilities = MangaListFilterCapabilities(
@@ -50,7 +61,52 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
         availableStates = EnumSet.of(MangaState.ONGOING, MangaState.FINISHED)
     )
 
-    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+	override val authUrl: String
+		get() = domain
+
+	override suspend fun isAuthorized(): Boolean {
+		val token = loadAuthToken(domain)
+		if (token.isNotBlank()) {
+			userToken = token
+			return true
+		}
+		return false
+	}
+
+	override suspend fun getUsername(): String {
+		val raw = WebViewHelper(context)
+			.getLocalStorageValue(domain, "user_info")
+			?.removeSurrounding('"')
+			?.trim()
+
+		if (raw.isNullOrBlank()) {
+			throw AuthRequiredException(
+				source,
+				IllegalStateException("user_info not found in Local Storage")
+			)
+		}
+
+		val localStorage = try {
+			JSONObject(raw)
+		} catch (e: Exception) {
+			throw AuthRequiredException(
+				source,
+				IllegalStateException("Invalid user_info JSON", e)
+			)
+		}
+
+		val name = localStorage.optString("name")
+		if (name.isBlank()) {
+			throw AuthRequiredException(
+				source,
+				IllegalStateException("Username not found")
+			)
+		}
+
+		return name
+	}
+
+	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
         enforceRateLimit()
         val url = buildString {
             append(apiUrl)
@@ -79,7 +135,7 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
             }
         }
 
-        val json = webClient.httpGet(url, extraHeaders = apiHeaders).parseJson()
+        val json = webClient.httpGet(url, extraHeaders = apiHeaders()).parseJson()
         val result = json.optJSONObject("result") ?: return emptyList()
         val data = result.optJSONArray("data") ?: return emptyList()
 
@@ -125,20 +181,29 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
         val chapters = try {
             enforceRateLimit()
             val chapterApiUrl = "https://$domain/api/comic/$comicId/chapter?limit=-1"
-            val chapterJson = webClient.httpGet(chapterApiUrl, extraHeaders = apiHeaders).parseJson()
+
+			// Auth before send request for chapters
+			if (userToken.isBlank()) {
+				throw AuthRequiredException(
+					source,
+					IllegalStateException("No username found, please login")
+				)
+			}
+
+            val chapterJson = webClient.httpGet(chapterApiUrl, extraHeaders = apiHeaders()).parseJson()
             val chaptersData = chapterJson.getJSONObject("result").getJSONArray("chapters")
 
             List(chaptersData.length()) { i ->
                 val item = chaptersData.getJSONObject(i)
                 val number = item.getString("numberChapter")
                 val name = item.getString("name")
-                val chapterUrl = "/truyen/$slug/chuong-$number"
+                val chapterUrl = "/truyen/$slug/chuong-$number" // keep for generateUid
                 MangaChapter(
                     id = generateUid(chapterUrl),
                     title = if (name != "N/A" && name.isNotBlank()) name else "Chapter $number",
                     number = number.toFloatOrNull() ?: -1f,
                     volume = 0,
-                    url = chapterUrl,
+                    url = "$comicId:$number/$slug",
                     scanlator = null,
                     uploadDate = item.optLong("updateTime", 0L),
                     branch = null,
@@ -174,41 +239,35 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-        enforceRateLimit()
-        val responseBody = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).body.string()
-        val chapterJsonRaw = responseBody.substringAfter("chapterJson: `", "").substringBefore("`", "")
+		val fullUrl = "https://$domain/truyen/" +
+			chapter.url.substringAfter("/") + "/" +
+			chapter.url.substringAfter(":").substringBefore("/")
+		if (userToken.isBlank()) throw AuthRequiredException(source,
+			IllegalStateException("Token not found, please login"))
+		else userToken = loadAuthToken(fullUrl)
 
-        val imageUrls: List<String>
-        if (chapterJsonRaw.isNotBlank()) {
-            val json = JSONObject(chapterJsonRaw)
-            val data = json.getJSONObject("body").getJSONObject("result").getJSONArray("data")
-            imageUrls = List(data.length()) { i -> data.getString(i) }
-        } else {
-            // Fallback: Call the authenticated API
-            val comicId = responseBody.substringAfter("comic = {id:\"", "").substringBefore("\"", "")
-            val chapterNumber = chapter.url.substringAfterLast("chuong-")
-            val nameEn = chapter.url.substringAfter("/truyen/").substringBefore("/chuong-")
+		val payload =
+			"comicId=${chapter.url.substringBefore(":")}" +
+				"&chapterNumber=${chapter.url.substringAfter(":").substringBefore("/")}" +
+				"&nameEn=${chapter.url.substringAfter("/")}"
 
-            if (comicId.isBlank()) {
-                throw Exception("Cannot find comicId in HTML for fallback image request")
-            }
+		val res = webClient.httpPost(
+			"https://$domain/api/chapter/loadAll".toHttpUrl(),
+			payload,
+			apiHeaders()
+		).parseJson()
 
-            val formBody = mapOf(
-                "comicId" to comicId,
-                "chapterNumber" to chapterNumber,
-                "nameEn" to nameEn
-            )
-            val authApiUrl = "$apiUrl/chapter/auth".toHttpUrl()
-            val authResponse = webClient.httpPost(url = authApiUrl, form = formBody, extraHeaders = apiHeaders).parseJson()
-            val data = authResponse.getJSONObject("result").getJSONArray("data")
-            imageUrls = List(data.length()) { i -> data.getString(i) }
-        }
+		val data = res.getJSONObject("result").getJSONArray("data")
 
-        return imageUrls.map { url ->
-            val finalUrl = if (url.startsWith("/image/")) "https://$domain$url" else url
-            MangaPage(id = generateUid(finalUrl), url = finalUrl, preview = null, source = source)
-        }
-    }
+		return data.asTypedList<String>().map {
+			MangaPage(
+				id = generateUid(it),
+				url = it,
+				preview = null,
+				source = source,
+			)
+		}
+	}
 
     private suspend fun enforceRateLimit() {
         requestMutex.withLock {
@@ -221,7 +280,16 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
         }
     }
 
-    private fun availableTags() = arraySetOf(
+	private suspend fun loadAuthToken(domain: String): String {
+		return WebViewHelper(context)
+			.getLocalStorageValue(domain, "Authorization")
+			?.removeSurrounding('"')
+			?.trim()
+			?.takeIf { it.startsWith("Bearer ") }
+			.toString()
+	}
+
+	private fun availableTags() = arraySetOf(
         MangaTag("Anime", "ANI", source),
         MangaTag("Drama", "DRA", source),
         MangaTag("Josei", "JOS", source),
@@ -271,6 +339,5 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
 
     companion object {
         private const val REQUEST_DELAY_MS = 350L
-        private const val TOKEN_KEY = "Bearer eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJEcmFrZW4iLCJjb21pY0lkcyI6W10sInJvbGVJZCI6bnVsbCwiZ3JvdXBJZCI6bnVsbCwiYWRtaW4iOmZhbHNlLCJyYW5rIjowLCJwZXJtaXNzaW9uIjpbXSwiaWQiOiIwMDAxMTE1OTg2IiwidGVhbSI6ZmFsc2UsImlhdCI6MTc1NzU5NjQxMSwiZW1haWwiOiJudWxsIn0.VcGDaVQvyowtvja04CTUpfCP5XiC5qIdPmANZL0Gjz2kjz__PJ8LATQ9s44FpNohMpgLgPQO0TVs67D_YFlLNw"
     }
 }
