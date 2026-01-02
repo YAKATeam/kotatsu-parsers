@@ -65,8 +65,8 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
 		get() = domain
 
 	override suspend fun isAuthorized(): Boolean {
-		val token = loadAuthToken()
-		if (!token.isNullOrBlank()) {
+		val token = loadAuthToken(domain)
+		if (token.isNotBlank()) {
 			userToken = token
 			return true
 		}
@@ -203,7 +203,7 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
                     title = if (name != "N/A" && name.isNotBlank()) name else "Chapter $number",
                     number = number.toFloatOrNull() ?: -1f,
                     volume = 0,
-                    url = "${item.getLong("id")}:$number/$slug",
+                    url = "$comicId:$number/$slug",
                     scanlator = null,
                     uploadDate = item.optLong("updateTime", 0L),
                     branch = null,
@@ -239,6 +239,13 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+		val fullUrl = "https://$domain/truyen/" +
+			chapter.url.substringAfter("/") + "/" +
+			chapter.url.substringAfter(":").substringBefore("/")
+		if (userToken.isBlank()) throw AuthRequiredException(source,
+			IllegalStateException("Token not found, please login"))
+		else userToken = loadAuthToken(fullUrl)
+
 		val payload =
 			"comicId=${chapter.url.substringBefore(":")}" +
 				"&chapterNumber=${chapter.url.substringAfter(":").substringBefore("/")}" +
@@ -273,12 +280,13 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
         }
     }
 
-	private suspend fun loadAuthToken(): String? {
+	private suspend fun loadAuthToken(domain: String): String {
 		return WebViewHelper(context)
 			.getLocalStorageValue(domain, "Authorization")
 			?.removeSurrounding('"')
 			?.trim()
 			?.takeIf { it.startsWith("Bearer ") }
+			.toString()
 	}
 
 	private fun availableTags() = arraySetOf(
