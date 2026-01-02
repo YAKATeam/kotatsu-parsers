@@ -241,7 +241,7 @@ internal class GocTruyenTranhVui(context: MangaLoaderContext):
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val payload =
 			"comicId=${chapter.url.substringBefore(":")}" +
-				"&chapterNumber=${chapter.url.substringAfter(":")}" +
+				"&chapterNumber=${chapter.url.substringAfter(":").substringBefore("/")}" +
 				"&nameEn=${chapter.url.substringAfter("/")}"
 
 		val res = webClient.httpPost(
