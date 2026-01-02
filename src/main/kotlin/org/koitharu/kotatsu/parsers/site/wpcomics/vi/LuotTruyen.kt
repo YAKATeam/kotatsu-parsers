@@ -3,9 +3,12 @@ package org.koitharu.kotatsu.parsers.site.wpcomics.vi
 import androidx.collection.ArraySet
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import org.koitharu.kotatsu.parsers.Broken
+import okhttp3.Headers
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
+import org.koitharu.kotatsu.parsers.MangaParserAuthProvider
 import org.koitharu.kotatsu.parsers.MangaSourceParser
+import org.koitharu.kotatsu.parsers.config.ConfigKey
+import org.koitharu.kotatsu.parsers.exception.AuthRequiredException
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.site.wpcomics.WpComicsParser
@@ -13,10 +16,28 @@ import org.koitharu.kotatsu.parsers.util.*
 import java.text.SimpleDateFormat
 import java.util.*
 
-@Broken("Need to handle login + Fix getPages")
 @MangaSourceParser("LUOTTRUYEN", "LuotTruyen", "vi")
 internal class LuotTruyen(context: MangaLoaderContext) :
-	WpComicsParser(context, MangaParserSource.LUOTTRUYEN, "luottruyen1.com", 36) {
+	WpComicsParser(context, MangaParserSource.LUOTTRUYEN, "luottruyen1.com", 36), MangaParserAuthProvider {
+
+	override val userAgentKey = ConfigKey.UserAgent(
+		"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.46 Mobile Safari/537.36",
+	)
+
+	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+		super.onCreateConfig(keys)
+		keys.add(userAgentKey)
+	}
+
+	override val authUrl: String
+		get() = "https://$domain/dang-nhap"
+
+	override suspend fun isAuthorized(): Boolean =
+		context.cookieJar.getCookies(domain).any { it.name == "LoginToken" }
+
+	override suspend fun getUsername(): String {
+		return context.cookieJar.getCookies(domain).any { it.name == "LoginToken" }.toString()
+	}
 
 	override suspend fun getFilterOptions() = MangaListFilterOptions(
 		availableTags = getAvailableTags(),
@@ -54,12 +75,25 @@ internal class LuotTruyen(context: MangaLoaderContext) :
 		)
 	}
 
-	private val selectRequiredLogin = ".page-chapter"
+	override val selectPage = ".page-chapter"
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+		val header = Headers.Builder()
+			.add("Cookie", context.cookieJar.getCookies(domain).toString())
+			.build()
+
 		val fullUrl = chapter.url.toAbsoluteUrl(domain)
-		val doc = webClient.httpGet(fullUrl).parseHtml()
-		return doc.select(selectRequiredLogin).map { url ->
+		val doc = webClient.httpGet(fullUrl, header).parseHtml()
+
+		val elements = doc.select(selectPage)
+		if (elements.isEmpty()) {
+			throw AuthRequiredException(
+				source,
+				IllegalStateException("Token not found, please sign in!")
+			)
+		}
+
+		return doc.select(selectPage).map { url ->
 			val img = url.selectFirst("img")?.attr("src") ?: url.attr("data-src")
 			MangaPage(
 				id = generateUid(img),

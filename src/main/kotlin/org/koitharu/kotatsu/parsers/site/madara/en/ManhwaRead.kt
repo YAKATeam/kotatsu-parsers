@@ -98,7 +98,7 @@ internal class ManhwaRead(context: MangaLoaderContext) :
 
     override suspend fun getChapters(manga: Manga, doc: Document): List<MangaChapter> {
         val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
-        return doc.select("#chaptersList a.chapter-item").mapChapters(reversed = true) { i, a ->
+        return doc.select("#chaptersList a.chapter-item").mapChapters(reversed = false) { i, a ->
             val href = a.attrAsRelativeUrl("href")
             val name = a.selectFirst(".chapter-item__name")?.text()
 				?: a.text()
