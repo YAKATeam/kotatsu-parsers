@@ -1,18 +1,22 @@
 # Rate Limiting Utility
 
-This project now includes a robust rate-limiting utility for `OkHttp` clients, designed to prevent IP bans and `429 Too Many Requests` errors when scraping manga websites.
+This project includes a robust rate-limiting utility for `OkHttp` clients, designed to prevent IP bans and `429 Too Many Requests` errors when scraping manga websites.
 
 ## Location
 `src/main/kotlin/org/koitharu/kotatsu/parsers/network/RateLimitInterceptor.kt`
 
 ## How it Works
-The `RateLimitInterceptor` acts as a traffic cop for your network requests. It uses a **Token Bucket**-like algorithm (sliding window) to ensure that your parser never exceeds a specified number of requests (`permits`) within a given time (`period`).
+The implementation uses a **Header + Interceptor** pattern to provide global, thread-safe rate limiting.
 
-If a request is made when the limit is reached, the interceptor **automatically pauses (sleeps) the thread** until a "permit" becomes available. This happens transparently to the rest of your code.
+1.  **Configuration via Headers:** When you call `.rateLimit(...)`, it adds a lightweight interceptor that injects special headers (`X-Rate-Limit-Permits`, `X-Rate-Limit-Period`) into your requests.
+2.  **Global Enforcement:** A singleton `RateLimitInterceptor` sits at the network layer. It reads these headers and acquires a permit from a shared **Token Bucket** (keyed by the request's **Host**).
+3.  **Cross-Client Safety:** Because the limiter state is global and keyed by hostname, multiple `OkHttpClient` instances (e.g., different parsers) targeting the same website will automatically share and respect the same rate limit, preventing accidental bans.
+
+If a request is made when the limit is reached, the interceptor **automatically pauses (sleeps) the thread** until a permit becomes available.
 
 ## Usage
 
-First, ensure you have the necessary imports:
+Ensure you have the necessary imports:
 
 ```kotlin
 import org.koitharu.kotatsu.parsers.network.rateLimit
@@ -21,7 +25,7 @@ import kotlin.time.Duration.Companion.seconds
 ```
 
 ### 1. Basic Rate Limiting (Global)
-Limits **all** requests made by this client.
+Limits **all** requests made by this client instance.
 
 ```kotlin
 override val webClient: WebClient by lazy {
@@ -35,7 +39,7 @@ override val webClient: WebClient by lazy {
 ```
 
 ### 2. Host-Specific Rate Limiting
-Useful if a site has a strict API rate limit but allows faster image downloads from a CDN.
+Useful if a site has a strict API rate limit but allows faster image downloads from a CDN. The limit is applied only when the request matches the specific URL/Host.
 
 ```kotlin
 val newHttpClient = context.httpClient.newBuilder()

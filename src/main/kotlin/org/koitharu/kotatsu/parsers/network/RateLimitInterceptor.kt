@@ -1,8 +1,3 @@
-/**
- * Based on the following files and commits and its preceding works:
- * https://github.com/mihonapp/extensions-lib/blob/d96d81e/library/src/main/java/mihonx/network/rateLimit.kt
- * https://github.com/AntsyLich/mihon/commit/f5d8cbe
- */
 @file:Suppress("NOTHING_TO_INLINE")
 
 package org.koitharu.kotatsu.parsers.network
@@ -14,9 +9,111 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 import java.io.IOException
 import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+
+private const val HEADER_RATE_LIMIT_PERMITS = "X-Rate-Limit-Permits"
+private const val HEADER_RATE_LIMIT_PERIOD = "X-Rate-Limit-Period"
+
+/**
+ * An OkHttp interceptor that enforces rate limiting using headers.
+ * This allows sharing rate limits across different OkHttp clients if they target the same host.
+ */
+private object RateLimitInterceptor : Interceptor {
+    private val limiters = ConcurrentHashMap<String, RateLimiter>()
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        val permitsStr = request.header(HEADER_RATE_LIMIT_PERMITS)
+        val periodStr = request.header(HEADER_RATE_LIMIT_PERIOD)
+
+        if (permitsStr != null && periodStr != null) {
+            val permits = permitsStr.toIntOrNull()
+            val period = periodStr.toLongOrNull()
+
+            if (permits != null && period != null) {
+                val host = request.url.host
+                val limiter = limiters.computeIfAbsent(host) {
+                    RateLimiter(permits, period)
+                }
+
+                val timestamp = limiter.acquire(chain.call())
+
+                // Remove headers before sending to network
+                val newRequest = request.newBuilder()
+                    .removeHeader(HEADER_RATE_LIMIT_PERMITS)
+                    .removeHeader(HEADER_RATE_LIMIT_PERIOD)
+                    .build()
+
+                val response = chain.proceed(newRequest)
+
+                if (response.networkResponse == null) { // response is cached, release permit
+                    limiter.release(timestamp)
+                }
+
+                return response
+            }
+        }
+
+        return chain.proceed(request)
+    }
+}
+
+private class RateLimiter(val permits: Int, val periodMillis: Long) {
+    private val requestQueue = ArrayDeque<Long>(permits)
+    private val fairLock = Semaphore(1, true)
+
+    fun acquire(call: okhttp3.Call): Long {
+        try {
+            fairLock.acquire()
+        } catch (e: InterruptedException) {
+            throw IOException(e)
+        }
+
+        val timestamp: Long
+        try {
+            synchronized(requestQueue) {
+                while (requestQueue.size >= permits) {
+                    val periodStart = elapsedRealtime() - periodMillis
+                    var hasRemovedExpired = false
+                    while (!requestQueue.isEmpty() && requestQueue.first <= periodStart) {
+                        requestQueue.removeFirst()
+                        hasRemovedExpired = true
+                    }
+                    if (call.isCanceled()) {
+                        throw IOException("Canceled")
+                    } else if (hasRemovedExpired) {
+                        break
+                    } else {
+                        try {
+                            (requestQueue as Object).wait(requestQueue.first - periodStart)
+                        } catch (_: InterruptedException) {
+                            continue
+                        }
+                    }
+                }
+
+                timestamp = elapsedRealtime()
+                requestQueue.addLast(timestamp)
+            }
+        } finally {
+            fairLock.release()
+        }
+        return timestamp
+    }
+
+    fun release(timestamp: Long) {
+        synchronized(requestQueue) {
+            if (requestQueue.isEmpty() || timestamp < requestQueue.first) return
+            requestQueue.removeFirstOccurrence(timestamp)
+            (requestQueue as Object).notifyAll()
+        }
+    }
+}
+
+private fun elapsedRealtime(): Long = System.nanoTime() / 1_000_000
 
 /**
  * An OkHttp interceptor that enforces rate limiting across all requests.
@@ -83,68 +180,18 @@ public fun OkHttpClient.Builder.rateLimit(
     permits: Int,
     period: Duration = 1.seconds,
     shouldLimit: (HttpUrl) -> Boolean,
-): OkHttpClient.Builder = addInterceptor(object : Interceptor {
-    private val requestQueue = ArrayDeque<Long>(permits)
-    private val rateLimitMillis = period.inWholeMilliseconds
-    private val fairLock = Semaphore(1, true)
-
-    override fun intercept(chain: Interceptor.Chain): Response {
-        val call = chain.call()
-        if (call.isCanceled()) throw IOException("Canceled")
-
+): OkHttpClient.Builder {
+    addInterceptor { chain ->
         val request = chain.request()
-        if (!shouldLimit(request.url)) return chain.proceed(request)
-
-        try {
-            fairLock.acquire()
-        } catch (e: InterruptedException) {
-            throw IOException(e)
+        if (shouldLimit(request.url)) {
+            val newRequest = request.newBuilder()
+                .header(HEADER_RATE_LIMIT_PERMITS, permits.toString())
+                .header(HEADER_RATE_LIMIT_PERIOD, period.inWholeMilliseconds.toString())
+                .build()
+            chain.proceed(newRequest)
+        } else {
+            chain.proceed(request)
         }
-
-        val requestQueue = this.requestQueue
-        val timestamp: Long
-
-        try {
-            synchronized(requestQueue) {
-                while (requestQueue.size >= permits) { // queue is full, remove expired entries
-                    val periodStart = elapsedRealtime() - rateLimitMillis
-                    var hasRemovedExpired = false
-                    while (!requestQueue.isEmpty() && requestQueue.first <= periodStart) {
-                        requestQueue.removeFirst()
-                        hasRemovedExpired = true
-                    }
-                    if (call.isCanceled()) {
-                        throw IOException("Canceled")
-                    } else if (hasRemovedExpired) {
-                        break
-                    } else {
-                        try { // wait for the first entry to expire, or notified by cached response
-                            (requestQueue as Object).wait(requestQueue.first - periodStart)
-                        } catch (_: InterruptedException) {
-                            continue
-                        }
-                    }
-                }
-
-                // add request to queue
-                timestamp = elapsedRealtime()
-                requestQueue.addLast(timestamp)
-            }
-        } finally {
-            fairLock.release()
-        }
-
-        val response = chain.proceed(request)
-        if (response.networkResponse == null) { // response is cached, remove it from queue
-            synchronized(requestQueue) {
-                if (requestQueue.isEmpty() || timestamp < requestQueue.first) return@synchronized
-                requestQueue.removeFirstOccurrence(timestamp)
-                (requestQueue as Object).notifyAll()
-            }
-        }
-
-        return response
     }
-})
-
-private fun elapsedRealtime(): Long = System.nanoTime() / 1_000_000
+    return addInterceptor(RateLimitInterceptor)
+}
