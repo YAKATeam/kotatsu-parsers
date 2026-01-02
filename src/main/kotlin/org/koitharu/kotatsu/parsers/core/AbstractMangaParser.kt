@@ -61,7 +61,7 @@ public abstract class AbstractMangaParser @InternalParsersApi constructor(
 		get() = config[configKeyDomain]
 
 	@JvmField
-	protected val webClient: WebClient = OkHttpWebClient(context.httpClient, source)
+	protected open val webClient: WebClient = OkHttpWebClient(context.httpClient, source)
 
 	/**
 	 * Search list of manga by specified searchQuery

@@ -65,6 +65,7 @@ All members of the `MangaParser` class are documented. Pay attention to some pec
   to find issues during unit testing.
 - Your parser may also implement the `Interceptor` interface for additional manipulation of all network requests and
   responses, including image loading.
+- If the website has strict rate limits, use the `rateLimit` extension on the HTTP client. See [Rate Limiting](#rate-limiting) for details.
 - If your source website (or its API) uses pages for pagination instead of offset you should extend `PagedMangaParser`
   instead of `MangaParser`.
 - If your source website (or its API) does not provide pagination (has only one page of content) you should extend
@@ -94,3 +95,70 @@ It is recommended that unit tests be run before submitting a PR.
 
 If you need help or have some questions, ask a community in our [Telegram chat](https://t.me/kotatsuapp)
 or [Discord server](https://discord.gg/NNJ5RgVBC5).
+# Rate Limiting Utility
+
+This project includes a robust rate-limiting utility for `OkHttp` clients, designed to prevent IP bans and `429 Too Many Requests` errors when scraping manga websites.
+
+## Location
+`src/main/kotlin/org/koitharu/kotatsu/parsers/network/RateLimitInterceptor.kt`
+
+## How it Works
+The implementation uses a **Header + Interceptor** pattern to provide global, thread-safe rate limiting.
+
+1.  **Configuration via Headers:** When you call `.rateLimit(...)`, it adds a lightweight interceptor that injects special headers (`X-Rate-Limit-Permits`, `X-Rate-Limit-Period`) into your requests.
+2.  **Global Enforcement:** A singleton `RateLimitInterceptor` sits at the network layer. It reads these headers and acquires a permit from a shared **Token Bucket** (keyed by the request's **Host**).
+3.  **Cross-Client Safety:** Because the limiter state is global and keyed by hostname, multiple `OkHttpClient` instances (e.g., different parsers) targeting the same website will automatically share and respect the same rate limit, preventing accidental bans.
+
+If a request is made when the limit is reached, the interceptor **automatically pauses (sleeps) the thread** until a permit becomes available.
+
+## Usage
+
+Ensure you have the necessary imports:
+
+```kotlin
+import org.koitharu.kotatsu.parsers.network.rateLimit
+import kotlin.time.Duration.Companion.seconds
+// import kotlin.time.Duration.Companion.minutes
+```
+
+### 1. Basic Rate Limiting (Global)
+Limits **all** requests made by this client instance.
+
+```kotlin
+override val webClient: WebClient by lazy {
+    val newHttpClient = context.httpClient.newBuilder()
+        // Allow 2 requests every 1 second
+        .rateLimit(permits = 2, period = 1.seconds)
+        .build()
+    
+    OkHttpWebClient(newHttpClient, source)
+}
+```
+
+### 2. Host-Specific Rate Limiting
+Useful if a site has a strict API rate limit but allows faster image downloads from a CDN. The limit is applied only when the request matches the specific URL/Host.
+
+```kotlin
+val newHttpClient = context.httpClient.newBuilder()
+    // Limit requests to "api.mangafire.to" to 1 per 2 seconds
+    .rateLimit(url = "https://api.mangafire.to", permits = 1, period = 2.seconds)
+    .build()
+```
+
+### 3. Conditional Rate Limiting
+The most flexible option. Use a lambda to decide which requests to limit.
+
+```kotlin
+val newHttpClient = context.httpClient.newBuilder()
+    // Limit only search requests
+    .rateLimit(permits = 1, period = 3.seconds) { url -> 
+        url.encodedPath.contains("/search") 
+    }
+    .build()
+```
+
+## Best Practices
+
+*   **Start Conservative:** If you are getting banned, start with `1 request / 1 second` or `1 request / 2 seconds`.
+*   **APIs vs. HTML:** APIs often have stricter limits than loading standard HTML pages.
+*   **Image Servers:** You usually don't need to rate limit image servers (CDNs) as strictly, or at all, unless the site proxies images through their main server.
