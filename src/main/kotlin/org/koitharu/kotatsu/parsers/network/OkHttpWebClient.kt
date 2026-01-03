@@ -78,10 +78,18 @@ public class OkHttpWebClient(
 	}
 
 	override suspend fun graphQLQuery(endpoint: String, query: String): JSONObject {
+		return graphQLQuery(endpoint, "{$query}", JSONObject(), null)
+	}
+
+	override suspend fun graphQLQuery(endpoint: String, query: String, extraHeaders: Headers?): JSONObject {
+		return graphQLQuery(endpoint, "{$query}", JSONObject(), extraHeaders)
+	}
+
+	override suspend fun graphQLQuery(endpoint: String, query: String, variables: JSONObject, extraHeaders: Headers?): JSONObject {
 		val body = JSONObject()
 		body.put("operationName", null as Any?)
-		body.put("variables", JSONObject())
-		body.put("query", "{$query}")
+		body.put("variables", variables)
+		body.put("query", query)
 
 		val mediaType = "application/json; charset=utf-8".toMediaType()
 		val requestBody = body.toString().toRequestBody(mediaType)
@@ -89,6 +97,8 @@ public class OkHttpWebClient(
 			.post(requestBody)
 			.url(endpoint)
 			.addTags()
+			.addHeader("apollo-require-preflight", "true")
+			.addExtraHeaders(extraHeaders)
 		val json = httpClient.newCall(request.build()).await().parseJson()
 		json.optJSONArray("errors")?.let {
 			if (it.length() != 0) {
@@ -104,8 +114,8 @@ public class OkHttpWebClient(
 	}
 
 	private fun Request.Builder.addExtraHeaders(headers: Headers?): Request.Builder {
-		if (headers != null) {
-			headers(headers)
+		headers?.forEach { (name, value) ->
+			addHeader(name, value)
 		}
 		return this
 	}
