@@ -60,8 +60,7 @@ public abstract class AbstractMangaParser @InternalParsersApi constructor(
 	final override val domain: String
 		get() = config[configKeyDomain]
 
-	@JvmField
-	protected val webClient: WebClient = OkHttpWebClient(context.httpClient, source)
+	protected open val webClient: WebClient = OkHttpWebClient(context.httpClient, source)
 
 	/**
 	 * Search list of manga by specified searchQuery
