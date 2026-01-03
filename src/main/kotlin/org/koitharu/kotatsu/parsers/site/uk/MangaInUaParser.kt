@@ -19,7 +19,7 @@ internal class MangaInUaParser(context: MangaLoaderContext) : PagedMangaParser(
 	searchPageSize = 10,
 ) {
 
-	override val availableSortOrders: Set<SortOrder> = setOf(SortOrder.UPDATED)
+	override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.UPDATED)
 
 	override val configKeyDomain: ConfigKey.Domain = ConfigKey.Domain("manga.in.ua")
 

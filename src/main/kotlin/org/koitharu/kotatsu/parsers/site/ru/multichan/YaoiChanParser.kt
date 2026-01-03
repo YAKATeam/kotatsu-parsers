@@ -8,6 +8,7 @@ import org.koitharu.kotatsu.parsers.model.MangaChapter
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.model.SortOrder
 import org.koitharu.kotatsu.parsers.util.*
+import java.util.EnumSet
 
 @MangaSourceParser("YAOICHAN", "Яой-тян", "ru")
 internal class YaoiChanParser(context: MangaLoaderContext) : ChanParser(context, MangaParserSource.YAOICHAN) {
@@ -21,7 +22,7 @@ internal class YaoiChanParser(context: MangaLoaderContext) : ChanParser(context,
 		"yaoi-chan.me",
 	)
 
-	override val availableSortOrders: Set<SortOrder> = setOf(SortOrder.NEWEST)
+	override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.NEWEST)
 
 	override suspend fun getDetails(manga: Manga): Manga {
 		val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()

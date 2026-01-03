@@ -34,7 +34,7 @@ internal class ExHentaiParser(
     context: MangaLoaderContext,
 ) : PagedMangaParser(context, MangaParserSource.EXHENTAI, pageSize = 25), MangaParserAuthProvider, Interceptor {
 
-    override val availableSortOrders: Set<SortOrder> = setOf(SortOrder.NEWEST)
+    override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.NEWEST)
 
     override val configKeyDomain: ConfigKey.Domain
         get() {
