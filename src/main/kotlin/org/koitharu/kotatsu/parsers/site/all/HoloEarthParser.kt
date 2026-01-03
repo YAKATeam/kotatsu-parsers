@@ -10,6 +10,7 @@ import org.koitharu.kotatsu.parsers.util.parseHtml
 import org.koitharu.kotatsu.parsers.util.selectFirstOrThrow
 import org.koitharu.kotatsu.parsers.util.parseSafe
 import java.text.SimpleDateFormat
+import java.util.EnumSet
 import java.util.Locale
 
 @MangaSourceParser("HOLOEARTH", "HoloEarth")
@@ -24,7 +25,9 @@ internal class HoloEarthParser(context: MangaLoaderContext) :
 		keys.add(userAgentKey)
 	}
 
-	override val availableSortOrders: Set<SortOrder> = setOf(SortOrder.NEWEST)
+	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+		SortOrder.NEWEST,
+	)
 
 	override val filterCapabilities: MangaListFilterCapabilities
         get() = MangaListFilterCapabilities(
@@ -98,7 +101,7 @@ internal class HoloEarthParser(context: MangaLoaderContext) :
 			val url = li.selectFirstOrThrow(".manga-detail__list-link").attr("href")
 			val title = li.selectFirstOrThrow(".manga-detail__list-title").text()
 			val dateStr = li.selectFirstOrThrow(".manga-detail__list-date").text()
-			val uploadDate = dateFormat.parseSafe(dateStr) ?: 0L
+			val uploadDate = dateFormat.parseSafe(dateStr)
 			val scanlator = root.selectFirst(".manga-detail__person")?.text()
 
 			MangaChapter(
