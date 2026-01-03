@@ -309,13 +309,17 @@ internal abstract class NatsuParser(
         val headers = Headers.Companion.headersOf(
             "hx-request", "true",
             "hx-target", "chapter-list",
-            "hx-trigger", "chapter-list",
+            "hx-trigger", "getChapterList",
             "Referer", mangaAbsoluteUrl,
         )
 
         while (true) {
             val url = "https://${domain}/wp-admin/admin-ajax.php?manga_id=$mangaId&page=$page&action=chapter_list"
-            val doc = webClient.httpGet(url, headers).parseHtml()
+            val doc = try {
+                webClient.httpGet(url, headers).parseHtml()
+            } catch (e: Exception) {
+                break
+            }
 
             val chapterElements = doc.select("div#chapter-list > div[data-chapter-number]")
             if (chapterElements.isEmpty()) break
@@ -346,7 +350,7 @@ internal abstract class NatsuParser(
             page++
             if (page > 100) break
         }
-        return chapters.reversed()
+        return chapters.distinctBy { it.url }.reversed()
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
