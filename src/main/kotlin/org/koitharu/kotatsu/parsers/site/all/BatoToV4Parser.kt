@@ -234,18 +234,7 @@ internal class BatoToV4Parser(context: MangaLoaderContext) :
 	}
 
 	private suspend fun graphQLQuery(endpoint: String, query: String, variables: JSONObject): JSONObject {
-		val payload = JSONObject().apply {
-			put("query", query)
-			put("variables", variables)
-		}
-		val response = webClient.httpPost(endpoint.toHttpUrl(), payload, getRequestHeaders())
-		val json = response.parseJson()
-		json.optJSONArray("errors")?.let {
-			if (it.length() != 0) {
-				throw GraphQLException(it)
-			}
-		}
-		return json
+		return webClient.graphQLQuery(endpoint, query, getRequestHeaders())
 	}
 
 	private fun parseManga(json: JSONObject): Manga {

@@ -114,4 +114,12 @@ public interface WebClient {
 	 * @param query GraphQL request payload
 	 */
 	public suspend fun graphQLQuery(endpoint: String, query: String): JSONObject
+
+	/**
+	 * Do a GraphQL request to specific url
+	 * @param endpoint an url
+	 * @param query GraphQL request payload
+	 * @param extraHeaders additional HTTP headers for request
+	 */
+	public suspend fun graphQLQuery(endpoint: String, query: String, extraHeaders: Headers?): JSONObject
 }
