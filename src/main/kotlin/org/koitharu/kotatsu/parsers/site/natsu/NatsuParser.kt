@@ -5,6 +5,7 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
+import org.jsoup.HttpStatusException
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -33,6 +34,7 @@ import org.koitharu.kotatsu.parsers.util.src
 import org.koitharu.kotatsu.parsers.util.toAbsoluteUrl
 import org.koitharu.kotatsu.parsers.util.toRelativeUrl
 import org.koitharu.kotatsu.parsers.util.toTitleCase
+import org.koitharu.kotatsu.parsers.util.urlBuilder
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.EnumSet
@@ -299,55 +301,61 @@ internal abstract class NatsuParser(
         )
     }
 
-    protected open suspend fun loadChapters(
-        mangaId: String,
-        mangaAbsoluteUrl: String,
-    ): List<MangaChapter> {
-        val chapters = mutableListOf<MangaChapter>()
-        var page = 1
+	protected open suspend fun loadChapters(
+		mangaId: String,
+		mangaAbsoluteUrl: String,
+	): List<MangaChapter> {
+		val headers = Headers.headersOf(
+			"HX-Request", "true",
+			"HX-Target", "chapter-list",
+			"HX-Trigger", "chapter-list",
+			"HX-Current-URL", mangaAbsoluteUrl,
+			"Referer", mangaAbsoluteUrl,
+		)
 
-        val headers = Headers.Companion.headersOf(
-            "hx-request", "true",
-            "hx-target", "chapter-list",
-            "hx-trigger", "chapter-list",
-            "Referer", mangaAbsoluteUrl,
-        )
+		return buildList {
+			for (page in 1..50) {
+				val url = urlBuilder()
+					.addPathSegment("wp-admin")
+					.addPathSegment("admin-ajax.php")
+					.addQueryParameter("manga_id", mangaId)
+					.addQueryParameter("page", page.toString())
+					.addQueryParameter("action", "chapter_list")
 
-        while (true) {
-            val url = "https://${domain}/wp-admin/admin-ajax.php?manga_id=$mangaId&page=$page&action=chapter_list"
-            val doc = webClient.httpGet(url, headers).parseHtml()
+				// Trying to force stop when chapterElements not exist
+				val chapterElements = try {
+					webClient.httpGet(url.build(), headers).parseHtml()
+				} catch (e: HttpStatusException) {
+					if (e.statusCode == 520) {
+						break
+					} else {
+						throw e
+					}
+				}
 
-            val chapterElements = doc.select("div#chapter-list > div[data-chapter-number]")
-            if (chapterElements.isEmpty()) break
+				val response = chapterElements.select("div#chapter-list > div[data-chapter-number]")
+				if (response.isEmpty()) break
 
-            chapterElements.forEach { element ->
-                val a = element.selectFirst("a") ?: return@forEach
-                val href = a.attrAsRelativeUrl("href")
-                if (href.isBlank()) return@forEach
+				// Mapping
+				response.mapNotNullTo(this) { element ->
+					val a = element.selectFirst("a") ?: return@mapNotNullTo null
+					val href = a.attrAsRelativeUrl("href").takeIf { it.isNotBlank() } ?: return@mapNotNullTo null
 
-                val chapterTitle = element.selectFirst("div.font-medium span")?.text()?.trim() ?: ""
-                val dateText = element.selectFirst("time")?.text()
-                val number = element.attr("data-chapter-number").toFloatOrNull() ?: -1f
-
-                chapters.add(
-                    MangaChapter(
-                        id = generateUid(href),
-                        title = chapterTitle,
-                        url = href,
-                        number = number,
-                        volume = 0,
-                        scanlator = null,
-                        uploadDate = parseDate(dateText),
-                        branch = null,
-                        source = source,
-                    ),
-                )
-            }
-            page++
-            if (page > 100) break
-        }
-        return chapters.reversed()
-    }
+					MangaChapter(
+						id = generateUid(href),
+						title = element.selectFirst("div.font-medium span")?.text() ?: "",
+						url = href,
+						number = element.attr("data-chapter-number").toFloatOrNull() ?: -1f,
+						volume = 0,
+						scanlator = null,
+						uploadDate = parseDate(element.selectFirst("time")?.text()),
+						branch = null,
+						source = source,
+					)
+				}
+			}
+		}.reversed()
+	}
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
@@ -366,7 +374,7 @@ internal abstract class NatsuParser(
         return try {
             // Try to fetch from WP JSON API first (more reliable)
             val response = webClient.httpGet("https://${domain}/wp-json/wp/v2/genre?per_page=100&page=1&orderby=count&order=desc")
-            val jsonText = response.body.use { it?.string() } ?: return emptySet()
+            val jsonText = response.body.use { it.string() }
             val jsonArray = org.json.JSONArray(jsonText)
             val tags = mutableSetOf<MangaTag>()
 
@@ -382,7 +390,7 @@ internal abstract class NatsuParser(
                 )
             }
             tags
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             // Fallback to advanced-search page method
             try {
                 val doc = webClient.httpGet("https://${domain}/advanced-search/").parseHtml()
@@ -414,14 +422,14 @@ internal abstract class NatsuParser(
                     )
                 }
                 tags
-            } catch (e2: Exception) {
+            } catch (_: Exception) {
                 emptySet()
             }
         }
     }
 
     protected open fun parseDate(dateStr: String?): Long {
-        if (dateStr.isNullOrEmpty()) return 0
+        if (dateStr.isNullOrEmpty()) return 0L
 
         return try {
             when {
@@ -450,7 +458,7 @@ internal abstract class NatsuParser(
                 }
             }
         } catch (_: Exception) {
-            0
+            0L
         }
     }
 
@@ -473,7 +481,7 @@ internal abstract class NatsuParser(
         if (extraHeaders != null) {
             for (name in extraHeaders.names()) {
                 if (!name.equals("Content-Type", ignoreCase = true)) {
-                    val value = extraHeaders.get(name) ?: continue
+                    val value = extraHeaders[name] ?: continue
                     requestBuilder.addHeader(name, value)
                 }
             }
