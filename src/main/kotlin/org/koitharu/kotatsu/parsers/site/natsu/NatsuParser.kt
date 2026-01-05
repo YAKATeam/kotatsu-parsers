@@ -299,58 +299,47 @@ internal abstract class NatsuParser(
         )
     }
 
-	protected open val hxHeader = "chapter-list"
-
-    protected open suspend fun loadChapters(
-        mangaId: String,
-        mangaAbsoluteUrl: String,
-    ): List<MangaChapter> {
-        val chapters = mutableListOf<MangaChapter>()
-        var page = 1
-
-        val headers = Headers.headersOf(
-            "HX-Request", "true",
-            "HX-Target", hxHeader,
-            "HX-Trigger", hxHeader,
+	protected open suspend fun loadChapters(
+		mangaId: String,
+		mangaAbsoluteUrl: String,
+	): List<MangaChapter> {
+		val headers = Headers.headersOf(
+			"HX-Request", "true",
+			"HX-Target", "chapter-list",
+			"HX-Trigger", "chapter-list",
 			"HX-Current-URL", mangaAbsoluteUrl,
-            "Referer", mangaAbsoluteUrl,
-        )
+			"Referer", mangaAbsoluteUrl,
+		)
 
-        while (true) {
-            val url = "https://${domain}/wp-admin/admin-ajax.php?manga_id=$mangaId&page=$page&action=chapter_list"
-            val doc = webClient.httpGet(url, headers).parseHtml()
+		return buildList {
+			for (page in 1..50) {
+				val url = "https://${domain}/wp-admin/admin-ajax.php?manga_id=$mangaId&page=$page&action=chapter_list"
+				val chapterElements = webClient.httpGet(url, headers)
+					.parseHtml()
+					.select("div#chapter-list > div[data-chapter-number]")
 
-            val chapterElements = doc.select("div#chapter-list > div[data-chapter-number]")
-            if (chapterElements.isEmpty()) break
+				// Trying to force stop when chapterElements not exist
+				if (chapterElements.isEmpty()) break
 
-            chapterElements.forEach { element ->
-                val a = element.selectFirst("a") ?: return@forEach
-                val href = a.attrAsRelativeUrl("href")
-                if (href.isBlank()) return@forEach
+				chapterElements.mapNotNullTo(this) { element ->
+					val a = element.selectFirst("a") ?: return@mapNotNullTo null
+					val href = a.attrAsRelativeUrl("href").takeIf { it.isNotBlank() } ?: return@mapNotNullTo null
 
-                val chapterTitle = element.selectFirst("div.font-medium span")?.text()?.trim() ?: ""
-                val dateText = element.selectFirst("time")?.text()
-                val number = element.attr("data-chapter-number").toFloatOrNull() ?: -1f
-
-                chapters.add(
-                    MangaChapter(
-                        id = generateUid(href),
-                        title = chapterTitle,
-                        url = href,
-                        number = number,
-                        volume = 0,
-                        scanlator = null,
-                        uploadDate = parseDate(dateText),
-                        branch = null,
-                        source = source,
-                    ),
-                )
-            }
-            page++
-            if (page > 100) break
-        }
-        return chapters.reversed()
-    }
+					MangaChapter(
+						id = generateUid(href),
+						title = element.selectFirst("div.font-medium span")?.text()?.trim() ?: "",
+						url = href,
+						number = element.attr("data-chapter-number").toFloatOrNull() ?: -1f,
+						volume = 0,
+						scanlator = null,
+						uploadDate = parseDate(element.selectFirst("time")?.text()),
+						branch = null,
+						source = source,
+					)
+				}
+			}
+		}.reversed()
+	}
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
