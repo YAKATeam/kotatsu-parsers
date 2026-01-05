@@ -331,7 +331,7 @@ internal abstract class NatsuParser(
 				if (response.isEmpty()) break
 
 				// Mapping
-				chapterElements.mapNotNullTo(this) { element ->
+				response.mapNotNullTo(this) { element ->
 					val a = element.selectFirst("a") ?: return@mapNotNullTo null
 					val href = a.attrAsRelativeUrl("href").takeIf { it.isNotBlank() } ?: return@mapNotNullTo null
 

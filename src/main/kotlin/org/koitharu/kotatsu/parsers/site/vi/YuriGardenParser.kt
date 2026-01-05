@@ -35,7 +35,7 @@ internal abstract class YuriGardenParser(
 	private val availableTags = suspendLazy(initializer = ::fetchTags)
 
 	override val configKeyDomain = ConfigKey.Domain(domain)
-	private val apiSuffix = "api.$domain"
+	private val apiSuffix = "api.$domain/api"
 	private val cdnSuffix = "db.$domain/storage/v1/object/public/yuri-garden-store"
 
 	override fun getRequestHeaders(): Headers = Headers.Builder()
