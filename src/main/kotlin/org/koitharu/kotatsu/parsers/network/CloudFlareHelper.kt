@@ -16,7 +16,7 @@ public object CloudFlareHelper {
     private const val CF_CLEARANCE = "cf_clearance"
 
     public fun checkResponseForProtection(response: Response): Int {
-        if (response.code != HTTP_FORBIDDEN && response.code != HTTP_UNAVAILABLE) {
+        if (response.code != HTTP_FORBIDDEN && response.code != HTTP_UNAVAILABLE && response.code != 429) {
             return PROTECTION_NOT_DETECTED
         }
         val content = try {
@@ -28,9 +28,10 @@ public object CloudFlareHelper {
         }
         return when {
             content.selectFirst("h2[data-translate=\"blocked_why_headline\"]") != null -> PROTECTION_BLOCKED
-			content.getElementById("challenge-error-title") != null ||
-				content.getElementById("challenge-error-text") != null ||
-				content.selectFirst("form#challenge-form") != null -> PROTECTION_CAPTCHA
+            content.getElementById("challenge-error-title") != null ||
+                content.getElementById("challenge-error-text") != null ||
+                content.selectFirst("form#challenge-form") != null -> PROTECTION_CAPTCHA
+
             else -> PROTECTION_NOT_DETECTED
         }
     }
