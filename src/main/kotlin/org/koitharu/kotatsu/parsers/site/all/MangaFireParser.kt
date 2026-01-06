@@ -24,6 +24,7 @@ import org.koitharu.kotatsu.parsers.model.RATING_UNKNOWN
 import org.koitharu.kotatsu.parsers.model.SortOrder
 import org.koitharu.kotatsu.parsers.network.OkHttpWebClient
 import org.koitharu.kotatsu.parsers.network.WebClient
+import org.koitharu.kotatsu.parsers.network.rateLimit
 import org.koitharu.kotatsu.parsers.util.attrAsAbsoluteUrl
 import org.koitharu.kotatsu.parsers.util.attrAsRelativeUrl
 import org.koitharu.kotatsu.parsers.util.generateUid
@@ -53,6 +54,7 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import kotlin.math.min
+import kotlin.time.Duration.Companion.seconds
 
 private const val PIECE_SIZE = 200
 private const val MIN_SPLIT_COUNT = 5
@@ -64,10 +66,11 @@ internal abstract class MangaFireParser(
     private val siteLang: String,
 ) : PagedMangaParser(context, source, 30), Interceptor, MangaParserAuthProvider {
 
-    private val client: WebClient by lazy {
+    override val webClient: WebClient by lazy {
         val newHttpClient = context.httpClient.newBuilder()
             .sslSocketFactory(SSLUtils.sslSocketFactory!!, SSLUtils.trustManager)
             .hostnameVerifier { _, _ -> true }
+            .rateLimit(url = "https://$domain", permits = 2, period = 1.seconds)
             .addInterceptor { chain ->
                 val request = chain.request()
                 val response = chain.proceed(
@@ -148,13 +151,13 @@ internal abstract class MangaFireParser(
     }
 
     override suspend fun getUsername(): String {
-        val body = client.httpGet("https://${domain}/user/profile").parseHtml().body()
+        val body = webClient.httpGet("https://${domain}/user/profile").parseHtml().body()
         return body.selectFirst("form.ajax input[name*=username]")?.attr("value")
             ?: body.parseFailed("Cannot find username")
     }
 
     private val tags = suspendLazy(soft = true) {
-        client.httpGet("https://$domain/filter").parseHtml()
+        webClient.httpGet("https://$domain/filter").parseHtml()
             .select(".genres > li").map {
                 MangaTag(
                     title = it.selectFirstOrThrow("label").ownText().toTitleCase(sourceLocale),
@@ -256,7 +259,7 @@ internal abstract class MangaFireParser(
 			}
 		}
 
-		return client.httpGet(url.toAbsoluteUrl(domain)).parseHtml().parseMangaList()
+		return webClient.httpGet(url.toAbsoluteUrl(domain)).parseHtml().parseMangaList()
 	}
 
     private fun Document.parseMangaList(): List<Manga> {
@@ -362,7 +365,7 @@ internal abstract class MangaFireParser(
         val readVrfInput = "$mangaId@${branch.type}@${branch.langCode}"
         val readVrf = VrfGenerator.generate(readVrfInput)
 
-        val response = client
+        val response = webClient
             .httpGet("https://$domain/ajax/read/$mangaId/${branch.type}/${branch.langCode}?vrf=$readVrf")
 
         val chapterElements = response.parseJson()
@@ -372,7 +375,7 @@ internal abstract class MangaFireParser(
             .select("ul li a")
 
         if (branch.type == "chapter") {
-            val doc = client
+            val doc = webClient
                 .httpGet("https://$domain/ajax/manga/$mangaId/${branch.type}/${branch.langCode}")
                 .parseJson()
                 .getString("result")
@@ -409,13 +412,13 @@ internal abstract class MangaFireParser(
     private val volumeNumRegex = Regex("""vol(ume)?\s*(\d+)""", RegexOption.IGNORE_CASE)
 
     override suspend fun getRelatedManga(seed: Manga): List<Manga> {
-        val document = client.httpGet(seed.url.toAbsoluteUrl(domain)).parseHtml()
+        val document = webClient.httpGet(seed.url.toAbsoluteUrl(domain)).parseHtml()
 
         val mangas = document.select("section.m-related a[href*=/manga/]").mapNotNull {
             val url = it.attrAsRelativeUrl("href")
 
             try {
-                val mangaDocument = client
+                val mangaDocument = webClient
                     .httpGet(url.toAbsoluteUrl(domain))
                     .parseHtml()
 
@@ -476,7 +479,7 @@ internal abstract class MangaFireParser(
                     .addQueryParameter("language[]", siteLang)
                     .build()
 
-                client.httpGet(url)
+                webClient.httpGet(url)
                     .parseHtml().parseMangaList()
             }
             mangas.addAll(authorMangas)
@@ -492,7 +495,7 @@ internal abstract class MangaFireParser(
 
         val vrf = VrfGenerator.generate("$type@$chapterId")
 
-        val images = client
+        val images = webClient
             .httpGet("https://$domain/ajax/read/$type/$chapterId?vrf=$vrf")
             .parseJson()
             .getJSONObject("result")
