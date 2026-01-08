@@ -1,5 +1,8 @@
 package org.koitharu.kotatsu.parsers.site.all
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import org.json.JSONObject
 import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
@@ -7,16 +10,19 @@ import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
+import org.koitharu.kotatsu.parsers.util.json.asTypedList
 import org.koitharu.kotatsu.parsers.util.json.getStringOrNull
 import org.koitharu.kotatsu.parsers.util.json.mapJSON
 import org.koitharu.kotatsu.parsers.util.json.mapJSONNotNullToSet
 import java.text.SimpleDateFormat
 import java.util.*
 
+private const val CHAPTERS_PER_PAGE = 500
 private const val SERVER_DATA = "512"
 private const val SERVER_DATA_SAVER = "256"
+private const val LOCALE_FALLBACK = "en"
 
-@Broken("TODO: Handle all tags, fix getDetails, getPages")
+@Broken("TODO: Handle all tags, getPages")
 @MangaSourceParser("WEEBDEX", "WeebDex")
 internal class WeebDex(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.WEEBDEX, 42) {
@@ -301,8 +307,97 @@ internal class WeebDex(context: MangaLoaderContext) :
 		}
 	}
 
-	override suspend fun getDetails(manga: Manga): Manga {
-		return manga.copy()
+	override suspend fun getDetails(manga: Manga): Manga = coroutineScope {
+		val url = urlBuilder().host("api.$domain")
+			.addPathSegment("manga")
+			.addPathSegment(manga.url)
+
+		val json = webClient.httpGet(url.build()).parseJson()
+		val authors: Set<String> = sequenceOf("authors", "artists").flatMap { key ->
+			json.optJSONObject("relationships")?.optJSONArray(key)?.let { arr ->
+				(0 until arr.length()).asSequence().mapNotNull { i ->
+					arr.optJSONObject(i)?.run {
+						val name = optString("name").nullIfEmpty() ?: return@run null
+						val id = optString("id").nullIfEmpty() ?: return@run null
+						"$name - $id"
+					}
+				}
+			} ?: emptySequence()
+		}.distinct().toSet()
+
+		val chapters = async { loadChapters(manga.url) }
+
+		manga.copy(
+			authors = authors,
+			altTitles = setOfNotNull(json.optJSONObject("alt_titles")?.selectAltTitleByLocale()),
+			chapters = chapters.await(),
+			description = json.getString("description") ?: manga.title,
+		)
+	}
+
+	private suspend fun loadChapters(mangaId: String): List<MangaChapter> {
+		val allChapters = mutableListOf<JSONObject>()
+		var page = 1
+
+		// Load all chapter pages
+		while (true) {
+			val url = urlBuilder().host("api.$domain")
+				.addPathSegment("manga")
+				.addPathSegment(mangaId)
+				.addPathSegment("chapters")
+				.addQueryParameter("limit", CHAPTERS_PER_PAGE.toString())
+				.addQueryParameter("order", "asc")
+				.addQueryParameter("page", page.toString())
+				.build()
+
+			val json = webClient.httpGet(url).parseJson()
+			val data = json.optJSONArray("data")?.asTypedList<JSONObject>() ?: break
+
+			if (data.isEmpty()) break
+			allChapters.addAll(data)
+
+			if (data.size < CHAPTERS_PER_PAGE) break
+			page++
+		}
+
+		val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.ROOT).apply {
+			timeZone = TimeZone.getTimeZone("UTC")
+		}
+
+		val chaptersMap = mutableMapOf<String, MutableMap<Pair<Int, Float>, MangaChapter>>()
+
+		for (jo in allChapters) {
+			val id = jo.getString("id")
+			val chapterNum = jo.optString("chapter", "0").toFloatOrNull() ?: 0f
+			val volume = jo.optInt("volume", 0)
+			val language = jo.optString("language", "en")
+
+			val relationships = jo.getJSONObject("relationships")
+			val scanlator = relationships.optJSONArray("groups")
+				?.mapJSON { it.optString("name") }
+				?.joinToString(", ")
+
+			val locale = Locale.forLanguageTag(language)
+			val langName = locale.getDisplayLanguage(Locale.ENGLISH).ifEmpty { language.uppercase() }
+				.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ENGLISH) else it.toString() }
+
+			val branch = if (!scanlator.isNullOrBlank()) "$langName ($scanlator)" else langName
+			val chapterKey = Pair(volume, chapterNum)
+
+			val chapter = MangaChapter(
+				id = generateUid(id),
+				title = jo.optString("title").nullIfEmpty(),
+				number = chapterNum,
+				volume = volume,
+				url = id,
+				scanlator = scanlator,
+				uploadDate = dateFormat.parseSafe(jo.getString("published_at")),
+				branch = branch,
+				source = source,
+			)
+			chaptersMap.getOrPut(branch) { mutableMapOf() }[chapterKey] = chapter
+		}
+		return chaptersMap.values.flatMap { it.values }
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
@@ -340,5 +435,24 @@ internal class WeebDex(context: MangaLoaderContext) :
 				source = source,
 			)
 		}
+	}
+
+	private fun JSONObject.selectAltTitleByLocale(): String? {
+		val preferredLocales = context.getPreferredLocales()
+		for (locale in preferredLocales) {
+			getTitleForLocale(locale.language)?.let { return it }
+			getTitleForLocale(locale.toLanguageTag())?.let { return it }
+		}
+
+		getTitleForLocale(LOCALE_FALLBACK)?.let { return it }
+		return keys().asSequence()
+			.mapNotNull { getTitleForLocale(it) }
+			.firstOrNull()
+	}
+
+	private fun JSONObject.getTitleForLocale(locale: String): String? {
+		val arr = optJSONArray(locale) ?: return null
+		if (arr.length() == 0) return null
+		return arr.optString(0).nullIfEmpty()
 	}
 }
