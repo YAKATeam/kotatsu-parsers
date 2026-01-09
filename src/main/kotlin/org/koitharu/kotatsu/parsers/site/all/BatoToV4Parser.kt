@@ -3,6 +3,9 @@ package org.koitharu.kotatsu.parsers.site.all
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
@@ -233,12 +236,41 @@ internal class BatoToV4Parser(context: MangaLoaderContext) :
 		return chain.proceed(request)
 	}
 
+	// Custom httpPost & graphQLQuery function for requests
 	private suspend fun graphQLQuery(endpoint: String, query: String, variables: JSONObject): JSONObject {
 		val payload = JSONObject().apply {
 			put("query", query)
 			put("variables", variables)
 		}
-		val response = webClient.httpPost(endpoint.toHttpUrl(), payload, getRequestHeaders())
+
+		val customClient = context.httpClient.newBuilder()
+			.apply {
+				interceptors().clear()
+			}.build()
+
+		val bodyString = payload.toString()
+		val mediaType = "application/json; charset=utf-8".toMediaType()
+		val requestBody = bodyString.toRequestBody(mediaType)
+		val headers = getRequestHeaders().newBuilder()
+			.set("Content-Type", "application/json; charset=utf-8")
+			.removeAll("Content-Encoding")
+			.removeAll("Accept-Encoding")
+			.build()
+
+		val request = Request.Builder()
+			.post(requestBody)
+			.url(endpoint.toHttpUrl())
+			.headers(headers)
+			.tag(MangaParserSource::class.java, source)
+			.build()
+
+		val response = customClient.newCall(request).await()
+		if (!response.isSuccessful) {
+			val body = response.body.string()
+			response.close()
+			throw IllegalStateException("HTTP ${response.code}: $body")
+		}
+
 		val json = response.parseJson()
 		json.optJSONArray("errors")?.let {
 			if (it.length() != 0) {
